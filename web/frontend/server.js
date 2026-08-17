@@ -9,7 +9,12 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 // Generate config.js on startup
 function generateConfig() {
   const configContent = `window.API_BASE_URL = ${JSON.stringify(API_BASE_URL)};\n`;
-  fs.writeFileSync(path.join(PUBLIC_DIR, 'config.js'), configContent);
+  try {
+    fs.writeFileSync(path.join(PUBLIC_DIR, 'config.js'), configContent);
+  } catch (error) {
+    console.error('Failed to write config.js:', error);
+    process.exit(1);
+  }
 }
 
 // Serve static files
@@ -36,11 +41,6 @@ function serveFile(filePath, res) {
 }
 
 const server = http.createServer((req, res) => {
-  // Enable CORS for same-cluster requests
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
   if (req.method === 'OPTIONS') {
     res.writeHead(200);
     res.end();

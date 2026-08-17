@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 
 	_ "github.com/tursodatabase/libsql-client-go/libsql"
 )
@@ -47,7 +48,7 @@ func Connect(dbURL, authToken string) (*sql.DB, error) {
 	dsn := dbURL
 	if authToken != "" {
 		sep := "?"
-		if hasQuery(dbURL) {
+		if strings.Contains(dbURL, "?") {
 			sep = "&"
 		}
 		dsn = fmt.Sprintf("%s%sauthToken=%s", dbURL, sep, authToken)
@@ -55,18 +56,9 @@ func Connect(dbURL, authToken string) (*sql.DB, error) {
 
 	db, err := sql.Open("libsql", dsn)
 	if err != nil {
-		return nil, fmt.Errorf("open turso connection: %w", err)
+		return nil, fmt.Errorf("open turso connection: connection failed (check TURSO_DATABASE_URL/TURSO_AUTH_TOKEN)")
 	}
 	return db, nil
-}
-
-func hasQuery(url string) bool {
-	for _, c := range url {
-		if c == '?' {
-			return true
-		}
-	}
-	return false
 }
 
 // Migrate applies Schema. Safe to call repeatedly.

@@ -102,7 +102,7 @@ func main() {
 	// Each consumer runs in its own goroutine and logs errors
 	go func() {
 		for {
-			consumeEventsDiscovered(eventConsumer, db)
+			consumeEventsDiscovered(ctx, eventConsumer, db)
 			// Log error and retry after delay to avoid tight loop
 			log.Println("Events consumer exited, restarting in 5 seconds...")
 			time.Sleep(5 * time.Second)
@@ -111,7 +111,7 @@ func main() {
 
 	go func() {
 		for {
-			consumeNotifications(notifConsumer, db)
+			consumeNotifications(ctx, notifConsumer, db)
 			// Log error and retry after delay
 			log.Println("Notifications consumer exited, restarting in 5 seconds...")
 			time.Sleep(5 * time.Second)
@@ -173,6 +173,8 @@ func createOrUpdateWebUIEventsConsumer(ctx context.Context, js jetstream.JetStre
 	consumer, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
 		Durable:       "web-ui-api-events",
 		AckPolicy:     jetstream.AckExplicitPolicy,
+		MaxDeliver:    streams.EventsConsumerMaxDeliver,
+		AckWait:       streams.EventsConsumerAckWait,
 		FilterSubject: streams.EventsSubject,
 	})
 	if err != nil {
@@ -193,6 +195,8 @@ func createOrUpdateWebUINotificationsConsumer(ctx context.Context, js jetstream.
 	consumer, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
 		Durable:       "web-ui-api-notifications",
 		AckPolicy:     jetstream.AckExplicitPolicy,
+		MaxDeliver:    streams.EventsConsumerMaxDeliver,
+		AckWait:       streams.EventsConsumerAckWait,
 		FilterSubject: streams.NotificationsAllSubjects,
 	})
 	if err != nil {
@@ -204,14 +208,19 @@ func createOrUpdateWebUINotificationsConsumer(ctx context.Context, js jetstream.
 
 // consumeEventsDiscovered reads from the events.discovered consumer and
 // materializes events into the database.
-func consumeEventsDiscovered(consumer jetstream.Consumer, db *sql.DB) {
-	ctx := context.Background()
+func consumeEventsDiscovered(ctx context.Context, consumer jetstream.Consumer, db *sql.DB) {
 	msgsChan, err := consumer.Messages()
 	if err != nil {
 		log.Printf("Failed to get messages from events consumer: %v", err)
 		return
 	}
 	defer msgsChan.Stop()
+
+	// Watcher goroutine to stop the message channel on context cancellation
+	go func() {
+		<-ctx.Done()
+		msgsChan.Stop()
+	}()
 
 	for {
 		msg, err := msgsChan.Next()
@@ -223,7 +232,8 @@ func consumeEventsDiscovered(consumer jetstream.Consumer, db *sql.DB) {
 		var disc event.Discovered
 		if err := json.Unmarshal(msg.Data(), &disc); err != nil {
 			log.Printf("Failed to unmarshal Discovered message: %v", err)
-			msg.Nak()
+			// Malformed message will never become parseable on retry, so terminate it
+			msg.Term()
 			continue
 		}
 
@@ -240,14 +250,19 @@ func consumeEventsDiscovered(consumer jetstream.Consumer, db *sql.DB) {
 
 // consumeNotifications reads from the notifications consumer and updates
 // notification statuses in the database.
-func consumeNotifications(consumer jetstream.Consumer, db *sql.DB) {
-	ctx := context.Background()
+func consumeNotifications(ctx context.Context, consumer jetstream.Consumer, db *sql.DB) {
 	msgsChan, err := consumer.Messages()
 	if err != nil {
 		log.Printf("Failed to get messages from notifications consumer: %v", err)
 		return
 	}
 	defer msgsChan.Stop()
+
+	// Watcher goroutine to stop the message channel on context cancellation
+	go func() {
+		<-ctx.Done()
+		msgsChan.Stop()
+	}()
 
 	for {
 		msg, err := msgsChan.Next()
@@ -263,7 +278,8 @@ func consumeNotifications(consumer jetstream.Consumer, db *sql.DB) {
 			var sent event.NotificationSent
 			if err := json.Unmarshal(msg.Data(), &sent); err != nil {
 				log.Printf("Failed to unmarshal NotificationSent message: %v", err)
-				msg.Nak()
+				// Malformed message will never become parseable on retry, so terminate it
+				msg.Term()
 				continue
 			}
 
@@ -276,7 +292,8 @@ func consumeNotifications(consumer jetstream.Consumer, db *sql.DB) {
 			var failed event.NotificationFailed
 			if err := json.Unmarshal(msg.Data(), &failed); err != nil {
 				log.Printf("Failed to unmarshal NotificationFailed message: %v", err)
-				msg.Nak()
+				// Malformed message will never become parseable on retry, so terminate it
+				msg.Term()
 				continue
 			}
 

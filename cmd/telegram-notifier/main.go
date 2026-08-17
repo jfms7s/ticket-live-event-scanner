@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -87,8 +88,8 @@ func main() {
 
 func consumeMessages(ctx context.Context, consumer jetstream.Consumer, handler *Handler) {
 	// Use Consume with a callback handler
-	// This is a blocking call that will continue until context is cancelled
-	_, err := consumer.Consume(
+	// Consume() is non-blocking; it registers the callback and returns immediately
+	consumeCtx, err := consumer.Consume(
 		func(msg jetstream.Msg) {
 			// Process the message in the callback
 			if err := handler.HandleMessage(ctx, msg); err != nil {
@@ -106,6 +107,10 @@ func consumeMessages(ctx context.Context, consumer jetstream.Consumer, handler *
 
 	// Wait for context cancellation
 	<-ctx.Done()
+
+	// Stop message delivery cleanly before closing the connection
+	// This ensures in-flight callbacks complete and acks are sent
+	consumeCtx.Stop()
 }
 
 // Handler processes discovered events
@@ -173,28 +178,56 @@ func (h *Handler) HandleMessage(ctx context.Context, msg jetstream.Msg) error {
 
 	// Get message metadata - critical for determining delivery count and making decisions
 	meta, err := msg.Metadata()
+	var numDelivered int
+	var natsSeq uint64
+
 	if err != nil {
 		log.Printf("Failed to get message metadata for event %d: %v", discovered.EventID, err)
-		// Even with metadata failure, we must bound retry attempts
-		// Use a conservative default (treat as attempt 1) and apply exponential backoff
-		// If this keeps failing, we'll eventually hit the limit
-		log.Printf("Treating metadata failure as attempt 1 for event %d, will apply bounded retry", discovered.EventID)
+		// Fallback: try to read delivery count from message headers
+		numDeliveredStr := msg.Headers().Get("Nats-Num-Delivered")
+		if numDeliveredStr != "" {
+			// Parse the header value
+			if parsed, parseErr := strconv.Atoi(numDeliveredStr); parseErr == nil {
+				numDelivered = parsed
+			} else {
+				log.Printf("Failed to parse Nats-Num-Delivered header for event %d: %v", discovered.EventID, parseErr)
+				numDelivered = 1 // Conservative default
+			}
+		} else {
+			numDelivered = 1 // Conservative default if header is missing
+		}
+		log.Printf("Using fallback delivery count %d for event %d after metadata failure", numDelivered, discovered.EventID)
 
-		// Since we can't get NumDelivered, we can't definitively know if we're at max
-		// The safest approach: nak with increasing delays, and let the consumer eventually term
-		// We'll use a fixed increased backoff (10 seconds) for metadata failures to accelerate reaching max attempts
-		if err := msg.NakWithDelay(10 * time.Second); err != nil {
+		// Check if we've hit the delivery limit
+		if numDelivered >= streams.EventsConsumerMaxDeliver {
+			// Final attempt: publish notification.failed and term
+			// Use event ID as fallback sequence when metadata is unavailable
+			log.Printf("Event %d reached max delivery attempts (%d) with metadata failure", discovered.EventID, numDelivered)
+			if err := h.publishNotificationFailed(ctx, discovered.EventID, fmt.Sprintf("metadata error: %v", err), numDelivered, uint64(discovered.EventID)); err != nil {
+				log.Printf("Failed to publish notification.failed for event %d: %v", discovered.EventID, err)
+			}
+			if err := msg.Term(); err != nil {
+				log.Printf("Failed to terminate message for event %d: %v", discovered.EventID, err)
+			}
+			return nil
+		}
+
+		// Retry with exponential backoff
+		delay := BackoffDelay(numDelivered)
+		log.Printf("Retrying metadata failure for event %d (attempt %d/%d) in %v",
+			discovered.EventID, numDelivered, streams.EventsConsumerMaxDeliver, delay)
+		if err := msg.NakWithDelay(delay); err != nil {
 			log.Printf("Failed to nak message for event %d: %v", discovered.EventID, err)
 		}
-		return err
+		return nil
 	}
 
-	numDelivered := int(meta.NumDelivered)
+	numDelivered = int(meta.NumDelivered)
+	natsSeq = meta.Sequence.Stream
 
 	// Check if we've recently sent a message for this event to prevent duplicates
 	// if NATS publish failed and the message was redelivered.
 	// Verify NATS sequence matches to ensure it's the same message (not a manual retry).
-	natsSeq := meta.Sequence.Stream
 	h.mu.RLock()
 	recent, exists := h.recentlySent[discovered.EventID]
 	h.mu.RUnlock()
@@ -204,14 +237,14 @@ func (h *Handler) HandleMessage(ctx context.Context, msg jetstream.Msg) error {
 		// But still respect the MaxDeliver policy for this redelivery attempt
 		log.Printf("Event %d was recently sent (message_id: %s), attempting to republish notifications.sent",
 			discovered.EventID, recent.messageID)
-		if err := h.publishNotificationSent(ctx, discovered.EventID, recent.messageID); err != nil {
+		if err := h.publishNotificationSent(ctx, discovered.EventID, recent.messageID, natsSeq); err != nil {
 			log.Printf("Failed to republish notification.sent for event %d (attempt %d/%d): %v",
 				discovered.EventID, numDelivered, streams.EventsConsumerMaxDeliver, err)
 
 			// Respect MaxDeliver policy for the republish attempt
 			if numDelivered >= streams.EventsConsumerMaxDeliver {
 				// Final attempt: publish notification.failed and term
-				_ = h.publishNotificationFailed(ctx, discovered.EventID, err.Error(), numDelivered)
+				_ = h.publishNotificationFailed(ctx, discovered.EventID, err.Error(), numDelivered, natsSeq)
 				if err := msg.Term(); err != nil {
 					log.Printf("Failed to terminate message for event %d: %v", discovered.EventID, err)
 				}
@@ -252,14 +285,14 @@ func (h *Handler) HandleMessage(ctx context.Context, msg jetstream.Msg) error {
 		h.mu.Unlock()
 
 		// Now attempt to publish notification.sent to NATS (this may fail without affecting duplicate prevention)
-		if err := h.publishNotificationSent(ctx, discovered.EventID, telegramMessageID); err != nil {
+		if err := h.publishNotificationSent(ctx, discovered.EventID, telegramMessageID, natsSeq); err != nil {
 			log.Printf("Failed to publish notification.sent for event %d (attempt %d/%d): %v",
 				discovered.EventID, numDelivered, streams.EventsConsumerMaxDeliver, err)
 
 			// If publish fails, respect MaxDeliver policy for retry
 			if numDelivered >= streams.EventsConsumerMaxDeliver {
 				// Final attempt: publish notification.failed and term
-				if err := h.publishNotificationFailed(ctx, discovered.EventID, err.Error(), numDelivered); err != nil {
+				if err := h.publishNotificationFailed(ctx, discovered.EventID, err.Error(), numDelivered, natsSeq); err != nil {
 					log.Printf("Failed to publish notification.failed for event %d (final attempt): %v",
 						discovered.EventID, err)
 				}
@@ -302,7 +335,7 @@ func (h *Handler) HandleMessage(ctx context.Context, msg jetstream.Msg) error {
 	}
 
 	// Final attempt failed: publish notification.failed and term
-	if err := h.publishNotificationFailed(ctx, discovered.EventID, telegramErr.Error(), numDelivered); err != nil {
+	if err := h.publishNotificationFailed(ctx, discovered.EventID, telegramErr.Error(), numDelivered, natsSeq); err != nil {
 		log.Printf("Failed to publish notification.failed for event %d: %v", discovered.EventID, err)
 	}
 
@@ -316,7 +349,7 @@ func (h *Handler) HandleMessage(ctx context.Context, msg jetstream.Msg) error {
 	return nil
 }
 
-func (h *Handler) publishNotificationSent(ctx context.Context, eventID int64, messageID string) error {
+func (h *Handler) publishNotificationSent(ctx context.Context, eventID int64, messageID string, natsSeq uint64) error {
 	sent := event.NotificationSent{
 		EventID:           eventID,
 		TelegramMessageID: messageID,
@@ -328,7 +361,8 @@ func (h *Handler) publishNotificationSent(ctx context.Context, eventID int64, me
 		return fmt.Errorf("marshal notification.sent: %w", err)
 	}
 
-	_, err = h.js.Publish(ctx, streams.NotificationsSentSubject, data)
+	msgID := fmt.Sprintf("sent-%d-%d", eventID, natsSeq)
+	_, err = h.js.Publish(ctx, streams.NotificationsSentSubject, data, jetstream.WithMsgID(msgID))
 	if err != nil {
 		return fmt.Errorf("publish notification.sent: %w", err)
 	}
@@ -336,7 +370,7 @@ func (h *Handler) publishNotificationSent(ctx context.Context, eventID int64, me
 	return nil
 }
 
-func (h *Handler) publishNotificationFailed(ctx context.Context, eventID int64, errMsg string, attempts int) error {
+func (h *Handler) publishNotificationFailed(ctx context.Context, eventID int64, errMsg string, attempts int, natsSeq uint64) error {
 	failed := event.NotificationFailed{
 		EventID:  eventID,
 		Error:    errMsg,
@@ -349,7 +383,8 @@ func (h *Handler) publishNotificationFailed(ctx context.Context, eventID int64, 
 		return fmt.Errorf("marshal notification.failed: %w", err)
 	}
 
-	_, err = h.js.Publish(ctx, streams.NotificationsFailSubject, data)
+	msgID := fmt.Sprintf("failed-%d-%d", eventID, natsSeq)
+	_, err = h.js.Publish(ctx, streams.NotificationsFailSubject, data, jetstream.WithMsgID(msgID))
 	if err != nil {
 		return fmt.Errorf("publish notification.failed: %w", err)
 	}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jfms7s/ticket-live-event-scanner/internal/event"
 	"golang.org/x/net/html"
@@ -213,6 +214,21 @@ func parseEventURL(urlStr string) (slug string, id int64) {
 	return "", 0
 }
 
+// validateEventDate checks if the date string is in valid YYYY-MM-DD format.
+// If the date is empty, it is considered valid (optional field).
+// If a date is present, it must match the YYYY-MM-DD format.
+func validateEventDate(dateStr string) error {
+	if dateStr == "" {
+		// Empty date is acceptable (optional field)
+		return nil
+	}
+	_, err := time.Parse("2006-01-02", dateStr)
+	if err != nil {
+		return fmt.Errorf("event date %q does not match YYYY-MM-DD format: %w", dateStr, err)
+	}
+	return nil
+}
+
 // parseEventDetail extracts detailed event information from an event detail page.
 func parseEventDetail(body string, eventID int64) (*event.Discovered, error) {
 	doc, err := html.Parse(strings.NewReader(body))
@@ -231,6 +247,11 @@ func parseEventDetail(body string, eventID int64) (*event.Discovered, error) {
 	evt.Venue = itemprops["location"]
 	evt.ImageURL = itemprops["image"]
 	evt.EventDate = itemprops["startDate"]
+
+	// Validate event date format
+	if err := validateEventDate(evt.EventDate); err != nil {
+		return nil, fmt.Errorf("event %d: invalid event date: %w", eventID, err)
+	}
 
 	// Extract URL and slug
 	if urlStr, ok := itemprops["url"]; ok {

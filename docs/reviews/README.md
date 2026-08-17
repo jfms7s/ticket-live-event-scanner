@@ -8,6 +8,8 @@
 - [web-ui-frontend.md](web-ui-frontend.md) — 3 fixes (one is a real deployment blocker: the container can't write its own config file as the non-root user the manifest requires), 3 lower-priority
 - [shared-infra.md](shared-infra.md) — mostly cross-references into the above (shared code = one fix covers multiple services), plus test-coverage and probe gaps
 
+All "To fix" and "Worth fixing, lower priority" items across the five checklists above have since been implemented (five parallel haiku fixer agents, one per component). The fixes were re-reviewed by the same 4 roles; that follow-up pass turned up 3 real issues (one Dockerfile gap, one dead-code cleanup, one missing regression test) plus 4 lower-priority test-coverage gaps — see [fixer-pass-review.md](fixer-pass-review.md).
+
 ## Two deployment blockers worth knowing about before anything else
 
 Both would only surface once actually deployed to a real cluster, which is presumably why review alone caught them and testing didn't:

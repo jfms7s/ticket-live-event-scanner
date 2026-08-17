@@ -206,10 +206,10 @@ async function handleRetrigger(e, eventId) {
     console.error('Retrigger error:', error);
   }
 
-  btn.disabled = false;
-  // Clear status message after 3 seconds
+  // Clear status message and re-enable button after 3 seconds
   setTimeout(() => {
     statusMsg.textContent = '';
+    btn.disabled = false;
   }, 3000);
 }
 
@@ -232,6 +232,10 @@ function startAutoRefresh() {
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
+  if (!window.API_BASE_URL) {
+    showError('Configuration error: API_BASE_URL is not defined. Please ensure config.js is loaded correctly.');
+    return;
+  }
   console.log('App initialized. API Base URL:', window.API_BASE_URL);
   setupFilterListeners();
   fetchEvents();

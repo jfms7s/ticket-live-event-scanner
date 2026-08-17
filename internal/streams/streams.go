@@ -42,7 +42,7 @@ func EnsureStreams(ctx context.Context, js jetstream.JetStream) error {
 
 	if _, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
 		Name:      NotificationsStreamName,
-		Subjects:  []string{NotificationsAllSubjects},
+		Subjects:  []string{NotificationsSentSubject, NotificationsFailSubject},
 		Storage:   jetstream.FileStorage,
 		Retention: jetstream.LimitsPolicy,
 		MaxAge:    streamMaxAge,

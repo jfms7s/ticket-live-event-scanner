@@ -115,7 +115,6 @@ func run(ctx context.Context, cfg Config) error {
 	// Discover events
 	if err := scraper.discover(ctx); err != nil {
 		log.Printf("Discovery encountered errors: %v", err)
-		scraper.stats.Errors++
 		return fmt.Errorf("discovery failed: %w", err)
 	}
 
@@ -189,12 +188,20 @@ func (s *Scraper) loadKnownIDs(ctx context.Context) error {
 	return nil
 }
 
+// normalizeMonth returns the month/year that results from advancing currentMonth/currentYear
+// by offset months, correctly rolling over the year for any offset (including >= 12).
+func normalizeMonth(currentMonth, currentYear, offset int) (month, year int) {
+	month = ((currentMonth-1+offset)%12)+1
+	year = currentYear + (currentMonth-1+offset)/12
+	return month, year
+}
+
 func (s *Scraper) discover(ctx context.Context) error {
 	now := time.Now()
 	currentMonth := int(now.Month())
 	currentYear := now.Year()
 
-	var lastErr error
+	var errorCount int
 
 	// Discover events from hub pages (design §6.1)
 	hubPages := []string{
@@ -219,20 +226,13 @@ func (s *Scraper) discover(ctx context.Context) error {
 
 		if err := s.fetchHubPage(ctx, hubSlug, hubID); err != nil {
 			log.Printf("Error fetching hub page %s: %v", hubSlug, err)
-			lastErr = err
+			errorCount++
 		}
 	}
 
 	// Iterate through months to discover
 	for i := 0; i <= s.config.AgendaMonthsAhead; i++ {
-		month := currentMonth + i
-		year := currentYear
-
-		// Normalize month overflow
-		if month > 12 {
-			month -= 12
-			year++
-		}
+		month, year := normalizeMonth(currentMonth, currentYear, i)
 
 		pageNum := 1
 		consecutiveEmptyPages := 0
@@ -252,7 +252,7 @@ func (s *Scraper) discover(ctx context.Context) error {
 			events, err := s.fetchSearchPage(ctx, month, year, pageNum)
 			if err != nil {
 				log.Printf("Error fetching page %d for %d-%02d: %v", pageNum, year, month, err)
-				lastErr = err
+				errorCount++
 				break
 			}
 
@@ -279,7 +279,7 @@ func (s *Scraper) discover(ctx context.Context) error {
 				// Fetch detail page for new events
 				if err := s.fetchAndPublishEvent(ctx, evt); err != nil {
 					log.Printf("Error fetching detail for event %d: %v", evt.EventID, err)
-					lastErr = err
+					errorCount++
 				}
 			}
 
@@ -287,7 +287,12 @@ func (s *Scraper) discover(ctx context.Context) error {
 		}
 	}
 
-	return lastErr
+	if errorCount > 0 {
+		s.stats.Errors = errorCount
+		return fmt.Errorf("discovery completed with %d error(s)", errorCount)
+	}
+
+	return nil
 }
 
 // extractIDFromSlug returns the trailing numeric event ID from a bare
@@ -319,6 +324,7 @@ func (s *Scraper) fetchHubPage(ctx context.Context, hubSlug string, hubID int64)
 		return fmt.Errorf("parse hub page %d: %w", hubID, err)
 	}
 
+	var errorCount int
 	for _, sess := range sessions {
 		s.stats.EventsFound++
 
@@ -330,7 +336,12 @@ func (s *Scraper) fetchHubPage(ctx context.Context, hubSlug string, hubID int64)
 
 		if err := s.fetchAndPublishEvent(ctx, sess); err != nil {
 			log.Printf("Error fetching detail for hub session event %d: %v", sess.EventID, err)
+			errorCount++
 		}
+	}
+
+	if errorCount > 0 {
+		return fmt.Errorf("hub page %d: %d error(s) fetching events", hubID, errorCount)
 	}
 
 	return nil
@@ -359,6 +370,11 @@ func (s *Scraper) fetchAndPublishEvent(ctx context.Context, basicEvent event.Dis
 	// Parse detail page
 	detailEvent, err := parseEventDetail(body, basicEvent.EventID)
 	if err != nil {
+		// Log and skip events with invalid dates; return other errors
+		if strings.Contains(err.Error(), "invalid event date") {
+			log.Printf("Skipping event %d: %v", basicEvent.EventID, err)
+			return nil
+		}
 		return err
 	}
 
@@ -463,8 +479,14 @@ func (s *Scraper) fetchURL(ctx context.Context, urlStr string) (string, error) {
 }
 
 func (s *Scraper) cacheURLResponse(url, etag, lastModified, body string) {
-	// If at capacity, remove oldest entry
-	if len(s.urlCache) >= maxCacheEntries {
+	// Check if this is a new URL (not already in cache)
+	isNewURL := true
+	if _, exists := s.urlCache[url]; exists {
+		isNewURL = false
+	}
+
+	// If at capacity and this is a new URL, remove oldest entry
+	if isNewURL && len(s.urlCache) >= maxCacheEntries {
 		if len(s.cacheOrder) > 0 {
 			oldest := s.cacheOrder[0]
 			delete(s.urlCache, oldest)
@@ -472,13 +494,17 @@ func (s *Scraper) cacheURLResponse(url, etag, lastModified, body string) {
 		}
 	}
 
-	// Add new entry
+	// Add or update entry
 	s.urlCache[url] = &urlCacheEntry{
 		etag:         etag,
 		lastModified: lastModified,
 		body:         body,
 	}
-	s.cacheOrder = append(s.cacheOrder, url)
+
+	// Only append to cacheOrder if this is a new URL
+	if isNewURL {
+		s.cacheOrder = append(s.cacheOrder, url)
+	}
 }
 
 func validateURL(urlStr, baseURL string) error {

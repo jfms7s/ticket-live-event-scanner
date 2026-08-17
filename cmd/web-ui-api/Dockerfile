@@ -28,6 +28,9 @@ WORKDIR /app
 # Copy the binary from the builder
 COPY --from=builder /build/web-ui-api .
 
+# Run as non-root user (defense-in-depth; k8s securityContext also enforces this)
+USER 1000:1000
+
 # Expose the default port
 EXPOSE 8080
 

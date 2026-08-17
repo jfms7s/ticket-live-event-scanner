@@ -45,21 +45,23 @@ func upsertEventAndInsertNotification(ctx context.Context, db *sql.DB, disc *eve
 		return fmt.Errorf("upsert event: %w", err)
 	}
 
-	// Check if a pending notification already exists for this event.
-	// This is a simple idempotency check: if redelivery happens within a few seconds,
-	// we won't create a duplicate pending row.
-	var existingCount int
-	checkSQL := `SELECT COUNT(*) FROM notifications WHERE event_id = ? AND status = 'pending'`
-	if err := tx.QueryRowContext(ctx, checkSQL, disc.EventID).Scan(&existingCount); err != nil {
-		return fmt.Errorf("check pending notification: %w", err)
-	}
-
-	// If a pending notification already exists, this is likely a redelivery. Skip insertion.
-	if existingCount > 0 {
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit transaction: %w", err)
+	// Check if a pending notification already exists for this event, but only for
+	// ReasonDiscovered (scraper redelivery). For ReasonManualRetry (user action),
+	// always create a fresh pending row per design.md §6.4.
+	if disc.Reason == event.ReasonDiscovered {
+		var existingCount int
+		checkSQL := `SELECT COUNT(*) FROM notifications WHERE event_id = ? AND status = 'pending'`
+		if err := tx.QueryRowContext(ctx, checkSQL, disc.EventID).Scan(&existingCount); err != nil {
+			return fmt.Errorf("check pending notification: %w", err)
 		}
-		return nil
+
+		// If a pending notification already exists, this is likely a redelivery. Skip insertion.
+		if existingCount > 0 {
+			if err := tx.Commit(); err != nil {
+				return fmt.Errorf("commit transaction: %w", err)
+			}
+			return nil
+		}
 	}
 
 	// Determine triggered_by from reason
@@ -146,7 +148,7 @@ func updateNotificationFailed(ctx context.Context, db *sql.DB, failed *event.Not
 	}
 	if rows == 0 {
 		// No pending notification found - similar to sent case
-		fmt.Printf("No pending notification found for event %d\n", failed.EventID)
+		log.Printf("No pending notification found for event %d (failed status expected)", failed.EventID)
 	}
 
 	return nil

@@ -358,3 +358,46 @@ func TestParseEventDetailMissingFields(t *testing.T) {
 		t.Errorf("expected empty optional fields")
 	}
 }
+
+func TestValidateEventDateValid(t *testing.T) {
+	tests := []string{
+		"2026-08-22",
+		"2025-01-01",
+		"2099-12-31",
+		"2000-06-15",
+	}
+
+	for _, dateStr := range tests {
+		err := validateEventDate(dateStr)
+		if err != nil {
+			t.Errorf("validateEventDate(%q): expected nil, got %v", dateStr, err)
+		}
+	}
+}
+
+func TestValidateEventDateEmpty(t *testing.T) {
+	err := validateEventDate("")
+	if err != nil {
+		t.Errorf("validateEventDate(empty): expected nil, got %v", err)
+	}
+}
+
+func TestValidateEventDateMalformed(t *testing.T) {
+	tests := []string{
+		"2026-8-22",       // missing leading zero on month
+		"22/08/2026",      // wrong separator
+		"08-22-2026",      // wrong order
+		"not-a-date",      // invalid string
+		"2026/08/22",      // wrong separator
+		"22-08-2026",      // wrong order
+		"2026-13-01",      // invalid month
+		"2026-08-32",      // invalid day
+	}
+
+	for _, dateStr := range tests {
+		err := validateEventDate(dateStr)
+		if err == nil {
+			t.Errorf("validateEventDate(%q): expected error, got nil", dateStr)
+		}
+	}
+}

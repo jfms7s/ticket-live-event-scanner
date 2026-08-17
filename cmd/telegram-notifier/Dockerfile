@@ -16,13 +16,24 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -installsuffix cgo \
     -o telegram-notifier ./cmd/telegram-notifier
 
-# Final stage: minimal scratch image
-FROM scratch
+# Final stage: Alpine runtime with shell for liveness probe
+FROM alpine:latest
+
+# Install ca-certificates for HTTPS
+RUN apk --no-cache add ca-certificates
+
+WORKDIR /app
+
+# Create non-root user
+RUN addgroup -g 1000 appgroup && adduser -u 1000 -G appgroup -s /sbin/nologin appuser
 
 # Copy the binary from builder
-COPY --from=builder /build/telegram-notifier /telegram-notifier
+COPY --from=builder /build/telegram-notifier /app/telegram-notifier
 
-# Copy CA certificates for HTTPS
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+# Change ownership to non-root user
+RUN chown -R appuser:appgroup /app
 
-ENTRYPOINT ["/telegram-notifier"]
+# Switch to non-root user
+USER appuser
+
+ENTRYPOINT ["/app/telegram-notifier"]

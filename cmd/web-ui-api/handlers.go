@@ -140,6 +140,8 @@ func (app *App) handleRetrigger(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build Discovered message from stored event
+	// Note: derefString converts nil EventDate to "" (empty string), which is handled
+	// gracefully by telegram-notifier's message template (simply omits the date line).
 	disc := &event.Discovered{
 		EventID:   eventResp.ID,
 		Slug:      eventResp.Slug,
@@ -159,9 +161,14 @@ func (app *App) handleRetrigger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Publish to NATS with a unique message ID (nano precision) to avoid deduplication
+	// Publish to NATS with a unique message ID (nano precision) to avoid deduplication.
+	// Use a detached, short-lived context to decouple the publish from the client's
+	// connection lifecycle, avoiding double-publishing if the client disconnects mid-request.
+	publishCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	msgID := fmt.Sprintf("retry-%d-%d", id, time.Now().UnixNano())
-	_, err = app.js.Publish(r.Context(), streams.EventsSubject,
+	_, err = app.js.Publish(publishCtx, streams.EventsSubject,
 		discBytes,
 		jetstream.WithMsgID(msgID),
 	)

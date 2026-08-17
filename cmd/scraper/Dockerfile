@@ -29,7 +29,7 @@ WORKDIR /app
 COPY --from=builder /build/scraper /app/scraper
 
 # Non-root user
-RUN addgroup -D scraper && adduser -D scraper -G scraper
+RUN addgroup -D -g 1000 scraper && adduser -D -u 1000 scraper -G scraper
 USER scraper
 
 ENTRYPOINT ["/app/scraper"]

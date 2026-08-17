@@ -35,7 +35,7 @@ func DecideAction(numDelivered, maxDeliver int) MessageAction {
 	return ActionNak
 }
 
-// BackoffDelay calculates exponential backoff delay: numDelivered * 5 seconds
+// BackoffDelay calculates linear backoff delay: numDelivered * 5 seconds
 func BackoffDelay(numDelivered int) time.Duration {
 	// Cap at 5 minutes to avoid excessively long delays
 	maxDelay := 5 * time.Minute
@@ -69,7 +69,8 @@ func SendTelegramMessage(ctx context.Context, botToken, chatID string, disc even
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	// Use a client with timeout to prevent blocking indefinitely
-	client := &http.Client{Timeout: 30 * time.Second}
+	// Set to 20s to leave margin before JetStream's 30s AckWait timeout
+	client := &http.Client{Timeout: 20 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("http request failed: %w", err)
