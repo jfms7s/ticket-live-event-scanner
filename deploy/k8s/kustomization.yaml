@@ -8,3 +8,17 @@ resources:
   - telegram-notifier.yaml
   - web-ui-api.yaml
   - web-ui-frontend.yaml
+
+images:
+  - name: ticket-scanner/scraper
+    newName: ghcr.io/jfms7s/ticket-live-event-scanner-scraper
+    newTag: latest
+  - name: ticket-scanner/telegram-notifier
+    newName: ghcr.io/jfms7s/ticket-live-event-scanner-telegram-notifier
+    newTag: latest
+  - name: ticket-scanner/web-ui-api
+    newName: ghcr.io/jfms7s/ticket-live-event-scanner-web-ui-api
+    newTag: latest
+  - name: ticket-scanner/web-ui-frontend
+    newName: ghcr.io/jfms7s/ticket-live-event-scanner-web-ui-frontend
+    newTag: latest

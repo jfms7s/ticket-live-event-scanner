@@ -26,32 +26,61 @@ This directory contains Kubernetes manifests to deploy the ticket-scanner servic
 - **secrets.example.yaml**: Placeholder Secret templates (see "Secrets" section below)
 - **kustomization.yaml**: Kustomize index, includes all resources
 
-## Image Placeholders
+## Images
 
-All image references use placeholders:
-- `ticket-scanner/scraper:local`
-- `ticket-scanner/telegram-notifier:local`
-- `ticket-scanner/web-ui-api:local`
-- `ticket-scanner/web-ui-frontend:local`
+The raw manifests reference local placeholder image names (e.g. `ticket-scanner/scraper:local`).
+`kustomization.yaml` rewrites these at apply-time via its `images:` section, so
+`kubectl apply -k deploy/k8s` always deploys the GHCR images, not the placeholders.
 
-**Before applying**, you must:
-1. Build each service's container image from its Dockerfile (`cmd/scraper`, `cmd/telegram-notifier`, `cmd/web-ui`, `web/frontend`)
-2. Push images to a registry, or load them into your local cluster (e.g., `kind load docker-image` or `minikube image load`)
-3. Update image references in the manifests to match your registry/tag
+### GitHub Container Registry (default)
 
-Example for local development (KinD cluster):
+`.github/workflows/build-push.yml` builds and pushes all four images to GHCR on every push to
+`main`, tagged both `latest` and the commit SHA:
+
+- `ghcr.io/jfms7s/ticket-live-event-scanner-scraper`
+- `ghcr.io/jfms7s/ticket-live-event-scanner-telegram-notifier`
+- `ghcr.io/jfms7s/ticket-live-event-scanner-web-ui-api`
+- `ghcr.io/jfms7s/ticket-live-event-scanner-web-ui-frontend`
+
+`kustomization.yaml` pins to the `latest` tag by default. To deploy an immutable, specific
+build instead, bump the tag before applying:
+
+```bash
+cd deploy/k8s
+kustomize edit set image \
+  ticket-scanner/scraper=ghcr.io/jfms7s/ticket-live-event-scanner-scraper:<git-sha> \
+  ticket-scanner/telegram-notifier=ghcr.io/jfms7s/ticket-live-event-scanner-telegram-notifier:<git-sha> \
+  ticket-scanner/web-ui-api=ghcr.io/jfms7s/ticket-live-event-scanner-web-ui-api:<git-sha> \
+  ticket-scanner/web-ui-frontend=ghcr.io/jfms7s/ticket-live-event-scanner-web-ui-frontend:<git-sha>
+kubectl apply -k .
+```
+
+GHCR images are pushed as private packages by default. If your cluster doesn't have
+`ghcr.io` pull access yet, create an `imagePullSecret` from a GitHub PAT with `read:packages`
+scope and reference it from each Deployment/CronJob's `spec.template.spec.imagePullSecrets`,
+or make the packages public in the repo's GitHub Package settings.
+
+### Local development (KinD/minikube)
+
+For iterating without pushing to GHCR, apply the raw manifests directly (bypassing kustomize's
+image rewrite) with locally built images:
+
 ```bash
 # Build images
 docker build -t ticket-scanner/scraper:local -f cmd/scraper/Dockerfile .
 docker build -t ticket-scanner/telegram-notifier:local -f cmd/telegram-notifier/Dockerfile .
-docker build -t ticket-scanner/web-ui-api:local -f cmd/web-ui/Dockerfile .
-docker build -t ticket-scanner/web-ui-frontend:local -f web/frontend/Dockerfile .
+docker build -t ticket-scanner/web-ui-api:local -f cmd/web-ui-api/Dockerfile .
+docker build -t ticket-scanner/web-ui-frontend:local web/frontend
 
 # Load into cluster
 kind load docker-image ticket-scanner/scraper:local
 kind load docker-image ticket-scanner/telegram-notifier:local
 kind load docker-image ticket-scanner/web-ui-api:local
 kind load docker-image ticket-scanner/web-ui-frontend:local
+
+# Apply each manifest directly, not via `-k`, so the :local tags aren't rewritten
+kubectl apply -f namespace.yaml -f nats.yaml -f scraper.yaml \
+  -f telegram-notifier.yaml -f web-ui-api.yaml -f web-ui-frontend.yaml
 ```
 
 ## Secrets
@@ -84,7 +113,7 @@ Get your bot token from [@BotFather](https://t.me/botfather), and your chat ID f
 
 ## Deploying
 
-After creating the Secrets and updating image references:
+After creating the Secrets:
 
 ```bash
 # Validate manifests (dry-run)

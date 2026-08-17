@@ -1,0 +1,48 @@
+name: Build and push images
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-push:
+    strategy:
+      matrix:
+        include:
+          - image: scraper
+            context: .
+            dockerfile: cmd/scraper/Dockerfile
+          - image: telegram-notifier
+            context: .
+            dockerfile: cmd/telegram-notifier/Dockerfile
+          - image: web-ui-api
+            context: .
+            dockerfile: cmd/web-ui-api/Dockerfile
+          - image: web-ui-frontend
+            context: web/frontend
+            dockerfile: web/frontend/Dockerfile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/ticket-live-event-scanner-${{ matrix.image }}:latest
+            ghcr.io/${{ github.repository_owner }}/ticket-live-event-scanner-${{ matrix.image }}:${{ github.sha }}
