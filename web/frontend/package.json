@@ -1,0 +1,17 @@
+{
+  "name": "web-ui-frontend",
+  "version": "0.1.0",
+  "description": "Ticket Live Event Scanner - Web UI Frontend",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "keywords": [
+    "ticketline",
+    "events",
+    "notifications"
+  ],
+  "author": "",
+  "license": "MIT"
+}

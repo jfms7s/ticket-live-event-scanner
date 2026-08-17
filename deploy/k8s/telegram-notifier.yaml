@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telegram-notifier
+  namespace: ticket-scanner
+  labels:
+    app: telegram-notifier
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: telegram-notifier
+  template:
+    metadata:
+      labels:
+        app: telegram-notifier
+    spec:
+      containers:
+      - name: telegram-notifier
+        image: ticket-scanner/telegram-notifier:local
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          allowPrivilegeEscalation: false
+        env:
+        - name: NATS_URL
+          value: "nats://nats:4222"
+        - name: TELEGRAM_BOT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: telegram-bot-token
+              key: bot_token
+        - name: TELEGRAM_CHAT_ID
+          valueFrom:
+            secretKeyRef:
+              name: telegram-bot-token
+              key: chat_id
+        livenessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - "kill -0 1"
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi

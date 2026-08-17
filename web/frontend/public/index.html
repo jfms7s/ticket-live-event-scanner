@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ticket Live Event Scanner</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/config.js"></script>
+  <script src="/utils.js"></script>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Ticket Live Event Scanner</h1>
+      <p>Event Discovery & Notification Dashboard</p>
+    </header>
+
+    <div id="errorBanner" class="error-banner" style="display: none;"></div>
+
+    <div class="controls">
+      <div class="filter-group">
+        <label for="eventStatusFilter">Event Status:</label>
+        <select id="eventStatusFilter">
+          <option value="">All</option>
+          <option value="active">Active</option>
+          <option value="finished">Finished</option>
+        </select>
+      </div>
+
+      <div class="filter-group">
+        <label for="notificationStatusFilter">Notification Status:</label>
+        <select id="notificationStatusFilter">
+          <option value="">All</option>
+          <option value="pending">Pending</option>
+          <option value="sent">Sent</option>
+          <option value="failed">Failed</option>
+        </select>
+      </div>
+
+      <button id="refreshButton" class="btn-primary">Refresh Now</button>
+    </div>
+
+    <div class="events-container">
+      <table class="events-table">
+        <thead>
+          <tr>
+            <th>Title</th>
+            <th>Venue</th>
+            <th>Category</th>
+            <th>Date</th>
+            <th>Status</th>
+            <th>Notification</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="eventsTableBody">
+          <tr class="loading-row">
+            <td colspan="7">Loading events...</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <footer>
+      <p>Auto-refreshing every 30 seconds</p>
+    </footer>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

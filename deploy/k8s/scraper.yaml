@@ -1,0 +1,82 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: scraper
+  namespace: ticket-scanner
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scraper
+  namespace: ticket-scanner
+rules: []
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: scraper
+  namespace: ticket-scanner
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: scraper
+subjects:
+- kind: ServiceAccount
+  name: scraper
+  namespace: ticket-scanner
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: scraper
+  namespace: ticket-scanner
+  labels:
+    app: scraper
+spec:
+  schedule: "0 * * * *"
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app: scraper
+        spec:
+          serviceAccountName: scraper
+          containers:
+          - name: scraper
+            image: ticket-scanner/scraper:local
+            imagePullPolicy: IfNotPresent
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 1000
+              allowPrivilegeEscalation: false
+            env:
+            - name: TICKETLINE_BASE_URL
+              value: "https://www.ticketline.pt"
+            - name: NATS_URL
+              value: "nats://nats:4222"
+            - name: TURSO_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: turso-credentials
+                  key: database_url
+            - name: TURSO_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: turso-credentials
+                  key: auth_token
+            - name: USER_AGENT
+              value: "ticket-live-event-scanner/0.1 (personal project; contact: jfms7s@gmail.com)"
+            - name: REQUEST_DELAY_MS
+              value: "1500"
+            - name: AGENDA_MONTHS_AHEAD
+              value: "2"
+            resources:
+              requests:
+                cpu: 50m
+                memory: 64Mi
+              limits:
+                cpu: 200m
+                memory: 128Mi
+          restartPolicy: OnFailure
