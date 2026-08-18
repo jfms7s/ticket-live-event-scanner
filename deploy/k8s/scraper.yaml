@@ -52,8 +52,6 @@ spec:
               runAsUser: 1000
               allowPrivilegeEscalation: false
             env:
-            - name: TICKETLINE_BASE_URL
-              value: "https://www.ticketline.pt"
             - name: TICKETLINE_HUB_PAGES
               value: "auchan-live-academia-maia-98164,auchan-live-academia-aveiro-98167"
             - name: NATS_URL

@@ -71,11 +71,10 @@ services:
       nats:
         condition: service_healthy
     environment:
-      TICKETLINE_BASE_URL: https://www.ticketline.pt
       # Comma-separated list of hub pages to track — full URLs or bare
-      # slugs both work (the domain, if given, is ignored in favor of
-      # TICKETLINE_BASE_URL above). Defaults to these same two pages if
-      # unset.
+      # slugs both work (the domain, if given, is ignored; hub pages are
+      # always fetched against ticketline.pt). Defaults to these same two
+      # pages if unset.
       TICKETLINE_HUB_PAGES: >-
         https://www.ticketline.pt/evento/auchan-live-academia-maia-98164,
         https://www.ticketline.pt/evento/auchan-live-academia-aveiro-98167

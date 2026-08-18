@@ -22,21 +22,17 @@ import (
 )
 
 type Config struct {
-	TicketlineBaseURL string
-	NatsURL           string
-	TursoDatabaseURL  string
-	TursoAuthToken    string
-	UserAgent         string
-	RequestDelayMS    int
-	HubPages          []string
+	NatsURL          string
+	TursoDatabaseURL string
+	TursoAuthToken   string
+	UserAgent        string
+	RequestDelayMS   int
+	HubPages         []string
 }
 
 // defaultHubPages are the venue/series hub pages tracked when
 // TICKETLINE_HUB_PAGES is not set (design.md §6.1).
-var defaultHubPages = []string{
-	"auchan-live-academia-maia-98164",
-	"auchan-live-academia-aveiro-98167",
-}
+var defaultHubPages = []string{}
 
 type Scraper struct {
 	config     Config
@@ -136,13 +132,12 @@ func run(ctx context.Context, cfg Config) error {
 
 func loadConfig() Config {
 	cfg := Config{
-		TicketlineBaseURL: getEnv("TICKETLINE_BASE_URL", "https://www.ticketline.pt"),
-		NatsURL:           getEnv("NATS_URL", "nats://localhost:4222"),
-		TursoDatabaseURL:  getEnvRequired("TURSO_DATABASE_URL"),
-		TursoAuthToken:    getEnvRequired("TURSO_AUTH_TOKEN"),
-		UserAgent:         getEnv("USER_AGENT", "ticket-live-event-scanner/0.1 (personal project; contact: jfms7s@gmail.com)"),
-		RequestDelayMS:    getEnvInt("REQUEST_DELAY_MS", 1500),
-		HubPages:          getEnvHubPages("TICKETLINE_HUB_PAGES", defaultHubPages),
+		NatsURL:          getEnv("NATS_URL", "nats://localhost:4222"),
+		TursoDatabaseURL: getEnvRequired("TURSO_DATABASE_URL"),
+		TursoAuthToken:   getEnvRequired("TURSO_AUTH_TOKEN"),
+		UserAgent:        getEnv("USER_AGENT", "ticket-live-event-scanner/0.1 (personal project; contact: jfms7s@gmail.com)"),
+		RequestDelayMS:   getEnvInt("REQUEST_DELAY_MS", 1500),
+		HubPages:         getEnvHubPages("TICKETLINE_HUB_PAGES", defaultHubPages),
 	}
 	return cfg
 }
@@ -196,7 +191,7 @@ func getEnvHubPages(key string, defaultVal []string) []string {
 // hubPageSlug extracts the bare "/evento/{slug}" slug from either a full
 // hub page URL (e.g. "https://www.ticketline.pt/evento/auchan-live-academia-maia-98164")
 // or an already-bare slug. Any domain in the input is ignored — hub pages
-// are always fetched against TicketlineBaseURL, so a caller can't point
+// are always fetched against "https://www.ticketline.pt", so a caller can't point
 // the scraper at an arbitrary host via this setting.
 func hubPageSlug(raw string) string {
 	if raw == "" {
@@ -294,7 +289,7 @@ func extractIDFromSlug(slug string) int64 {
 // example URLs are hub pages, not single events) and discovers new session
 // links on it using the same schema.org/Event card parsing as search pages.
 func (s *Scraper) fetchHubPage(ctx context.Context, hubSlug string, hubID int64) error {
-	hubURL := fmt.Sprintf("%s/evento/%s", s.config.TicketlineBaseURL, hubSlug)
+	hubURL := fmt.Sprintf("%s/evento/%s", "https://www.ticketline.pt", hubSlug)
 	body, err := s.fetchURL(ctx, hubURL)
 	if err != nil {
 		return fmt.Errorf("fetch hub page %d: %w", hubID, err)
@@ -330,7 +325,7 @@ func (s *Scraper) fetchHubPage(ctx context.Context, hubSlug string, hubID int64)
 
 func (s *Scraper) fetchAndPublishEvent(ctx context.Context, basicEvent event.Discovered) error {
 	// Construct full absolute URL for detail page
-	detailURL := fmt.Sprintf("%s/evento/%s", s.config.TicketlineBaseURL, basicEvent.Slug)
+	detailURL := fmt.Sprintf("%s/evento/%s", "https://www.ticketline.pt", basicEvent.Slug)
 	body, err := s.fetchURL(ctx, detailURL)
 	if err != nil {
 		return err
@@ -352,7 +347,7 @@ func (s *Scraper) fetchAndPublishEvent(ctx context.Context, basicEvent event.Dis
 		detailEvent.URL = detailURL
 	} else if !strings.HasPrefix(detailEvent.URL, "http") {
 		// If URL is relative, make it absolute
-		detailEvent.URL = s.config.TicketlineBaseURL + detailEvent.URL
+		detailEvent.URL = "https://www.ticketline.pt" + detailEvent.URL
 	}
 
 	// Detail pages don't self-link via itemprop="url", so parseEventDetail
@@ -407,7 +402,7 @@ func (s *Scraper) fetchAndPublishEvent(ctx context.Context, basicEvent event.Dis
 
 func (s *Scraper) fetchURL(ctx context.Context, urlStr string) (string, error) {
 	// Validate URL is within allowed paths
-	if err := validateURL(urlStr, s.config.TicketlineBaseURL); err != nil {
+	if err := validateURL(urlStr, "https://www.ticketline.pt"); err != nil {
 		return "", err
 	}
 
