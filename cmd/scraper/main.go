@@ -28,7 +28,14 @@ type Config struct {
 	TursoAuthToken    string
 	UserAgent         string
 	RequestDelayMS    int
-	AgendaMonthsAhead int
+	HubPages          []string
+}
+
+// defaultHubPages are the venue/series hub pages tracked when
+// TICKETLINE_HUB_PAGES is not set (design.md §6.1).
+var defaultHubPages = []string{
+	"auchan-live-academia-maia-98164",
+	"auchan-live-academia-aveiro-98167",
 }
 
 type Scraper struct {
@@ -135,7 +142,7 @@ func loadConfig() Config {
 		TursoAuthToken:    getEnvRequired("TURSO_AUTH_TOKEN"),
 		UserAgent:         getEnv("USER_AGENT", "ticket-live-event-scanner/0.1 (personal project; contact: jfms7s@gmail.com)"),
 		RequestDelayMS:    getEnvInt("REQUEST_DELAY_MS", 1500),
-		AgendaMonthsAhead: getEnvInt("AGENDA_MONTHS_AHEAD", 2),
+		HubPages:          getEnvHubPages("TICKETLINE_HUB_PAGES", defaultHubPages),
 	}
 	return cfg
 }
@@ -164,6 +171,52 @@ func getEnvInt(key string, defaultVal int) int {
 	return defaultVal
 }
 
+// getEnvHubPages reads a comma-separated list of hub pages from the given
+// env var, accepting either full URLs or bare slugs (see hubPageSlug).
+// Falls back to defaultVal if the env var is unset or contains no usable
+// entries.
+func getEnvHubPages(key string, defaultVal []string) []string {
+	val := os.Getenv(key)
+	if val == "" {
+		return defaultVal
+	}
+
+	var slugs []string
+	for _, raw := range strings.Split(val, ",") {
+		if slug := hubPageSlug(strings.TrimSpace(raw)); slug != "" {
+			slugs = append(slugs, slug)
+		}
+	}
+	if len(slugs) == 0 {
+		return defaultVal
+	}
+	return slugs
+}
+
+// hubPageSlug extracts the bare "/evento/{slug}" slug from either a full
+// hub page URL (e.g. "https://www.ticketline.pt/evento/auchan-live-academia-maia-98164")
+// or an already-bare slug. Any domain in the input is ignored — hub pages
+// are always fetched against TicketlineBaseURL, so a caller can't point
+// the scraper at an arbitrary host via this setting.
+func hubPageSlug(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	if strings.Contains(raw, "://") {
+		u, err := url.Parse(raw)
+		if err != nil {
+			return ""
+		}
+		raw = u.Path
+	}
+	raw = strings.Trim(raw, "/")
+	if raw == "" {
+		return ""
+	}
+	parts := strings.Split(raw, "/")
+	return parts[len(parts)-1]
+}
+
 func (s *Scraper) loadKnownIDs(ctx context.Context) error {
 	rows, err := s.db.QueryContext(ctx, "SELECT id FROM events")
 	if err != nil {
@@ -188,27 +241,12 @@ func (s *Scraper) loadKnownIDs(ctx context.Context) error {
 	return nil
 }
 
-// normalizeMonth returns the month/year that results from advancing currentMonth/currentYear
-// by offset months, correctly rolling over the year for any offset (including >= 12).
-func normalizeMonth(currentMonth, currentYear, offset int) (month, year int) {
-	month = ((currentMonth-1+offset)%12)+1
-	year = currentYear + (currentMonth-1+offset)/12
-	return month, year
-}
-
 func (s *Scraper) discover(ctx context.Context) error {
-	now := time.Now()
-	currentMonth := int(now.Month())
-	currentYear := now.Year()
-
 	var errorCount int
 
-	// Discover events from hub pages (design §6.1)
-	hubPages := []string{
-		"auchan-live-academia-maia-98164",
-		"auchan-live-academia-aveiro-98167",
-	}
-	for _, hubSlug := range hubPages {
+	// Discover events from the tracked hub pages only (design §6.1) — no
+	// site-wide /agenda or /pesquisa crawling.
+	for _, hubSlug := range s.config.HubPages {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -227,63 +265,6 @@ func (s *Scraper) discover(ctx context.Context) error {
 		if err := s.fetchHubPage(ctx, hubSlug, hubID); err != nil {
 			log.Printf("Error fetching hub page %s: %v", hubSlug, err)
 			errorCount++
-		}
-	}
-
-	// Iterate through months to discover
-	for i := 0; i <= s.config.AgendaMonthsAhead; i++ {
-		month, year := normalizeMonth(currentMonth, currentYear, i)
-
-		pageNum := 1
-		consecutiveEmptyPages := 0
-		const maxEmptyPagesInARow = 3 // Stop after 3 consecutive empty pages
-
-		// Paginate through search results for this month
-		for consecutiveEmptyPages < maxEmptyPagesInARow {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-			}
-
-			// Rate limiting
-			time.Sleep(time.Duration(s.config.RequestDelayMS) * time.Millisecond)
-
-			events, err := s.fetchSearchPage(ctx, month, year, pageNum)
-			if err != nil {
-				log.Printf("Error fetching page %d for %d-%02d: %v", pageNum, year, month, err)
-				errorCount++
-				break
-			}
-
-			if len(events) == 0 {
-				consecutiveEmptyPages++
-				pageNum++
-				continue // Try next page in case of gaps
-			}
-
-			// Reset counter on finding events
-			consecutiveEmptyPages = 0
-
-			for _, evt := range events {
-				s.stats.EventsFound++
-
-				// Skip if already known
-				if s.knownIDs[evt.EventID] {
-					continue
-				}
-
-				// Rate limit before detail page fetch for politeness
-				time.Sleep(time.Duration(s.config.RequestDelayMS) * time.Millisecond)
-
-				// Fetch detail page for new events
-				if err := s.fetchAndPublishEvent(ctx, evt); err != nil {
-					log.Printf("Error fetching detail for event %d: %v", evt.EventID, err)
-					errorCount++
-				}
-			}
-
-			pageNum++
 		}
 	}
 
@@ -347,18 +328,6 @@ func (s *Scraper) fetchHubPage(ctx context.Context, hubSlug string, hubID int64)
 	return nil
 }
 
-func (s *Scraper) fetchSearchPage(ctx context.Context, month, year, page int) ([]event.Discovered, error) {
-	u := fmt.Sprintf("%s/pesquisa/?month=%d&year=%d&page=%d",
-		s.config.TicketlineBaseURL, month, year, page)
-
-	body, err := s.fetchURL(ctx, u)
-	if err != nil {
-		return nil, err
-	}
-
-	return parseSearchPage(body)
-}
-
 func (s *Scraper) fetchAndPublishEvent(ctx context.Context, basicEvent event.Discovered) error {
 	// Construct full absolute URL for detail page
 	detailURL := fmt.Sprintf("%s/evento/%s", s.config.TicketlineBaseURL, basicEvent.Slug)
@@ -386,6 +355,20 @@ func (s *Scraper) fetchAndPublishEvent(ctx context.Context, basicEvent event.Dis
 		detailEvent.URL = s.config.TicketlineBaseURL + detailEvent.URL
 	}
 
+	// Detail pages don't self-link via itemprop="url", so parseEventDetail
+	// can't derive a slug from the page body — fall back to the slug we
+	// already know from the hub/search card that pointed us here.
+	if detailEvent.Slug == "" {
+		detailEvent.Slug = basicEvent.Slug
+	}
+
+	// Belt-and-braces: if some detail page variant lacks both the
+	// microdata image and the header thumb anchor parseEventDetail looks
+	// for, fall back to the poster already seen on the hub/search card.
+	if detailEvent.ImageURL == "" {
+		detailEvent.ImageURL = basicEvent.ImageURL
+	}
+
 	// Set reason
 	detailEvent.Reason = event.ReasonDiscovered
 
@@ -411,6 +394,11 @@ func (s *Scraper) fetchAndPublishEvent(ctx context.Context, basicEvent event.Dis
 	if err != nil {
 		return fmt.Errorf("publish event: %w", err)
 	}
+
+	// Mark as known immediately so this run doesn't re-fetch/re-publish it
+	// if the same event ID turns up again later in this same discovery pass
+	// (e.g. the same hub session appearing across multiple month searches).
+	s.knownIDs[basicEvent.EventID] = true
 
 	s.stats.EventsPublished++
 	log.Printf("Published event %d: %s", basicEvent.EventID, detailEvent.Title)

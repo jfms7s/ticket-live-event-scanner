@@ -13,7 +13,7 @@ status (pending / sent / failed), with a manual "retry" action.
 
 | Question | Decision |
 |---|---|
-| Scraper scope | **Discovery**: crawl ticketline.pt to find event pages we don't know about yet (not just re-check the 2 URLs given as examples) |
+| Scraper scope | **Tracked hub pages only**: re-check the 2 known venue/series hub URLs for new session IDs, no site-wide `/agenda`/`/pesquisa` crawling (revised — see §10) |
 | Language/runtime | **Go** for all three services |
 | Deployment | **Kubernetes** |
 | State store | **Turso** (libSQL / distributed SQLite) as the queryable source of truth for the web UI |
@@ -125,9 +125,9 @@ flowchart LR
   1. Loads the set of known event IDs (query Turso, or keep a JetStream KV
      bucket as a cheap existence-check cache — Turso is simpler since the
      web-ui already needs it).
-  2. Walks `/agenda/{current..N months}` (and the two known hub pages, since
-     they can spawn new session IDs on their own) using the microdata
-     parser described above.
+  2. Walks the two known hub pages only, since they can spawn new session
+     IDs on their own, using the microdata parser described above. No
+     site-wide `/agenda`/`/pesquisa` crawling (revised — see §10).
   3. For every `/evento/{id}` not already known, fetches the detail page for
      full fields, builds an `EventDiscovered` message, and publishes it to
      `events.discovered` on the `EVENTS` JetStream stream (dedup via
@@ -348,3 +348,12 @@ All open design questions are settled:
 
 Proceeding to concrete NATS stream configs, Go module layout, and
 Kubernetes manifests.
+
+### Revision (2026-08-18): scraper scope narrowed to tracked hub pages
+
+Dropped the site-wide `/agenda`/`/pesquisa` monthly crawl. The scraper now
+only re-checks a configured list of hub pages
+(`TICKETLINE_HUB_PAGES`, comma-separated full URLs or bare slugs, defaulting
+to `auchan-live-academia-maia-98164` and `auchan-live-academia-aveiro-98167`)
+for new session IDs each run — no discovery of unrelated events elsewhere
+on the site. `AGENDA_MONTHS_AHEAD` config/env var removed accordingly.

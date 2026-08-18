@@ -46,20 +46,48 @@ func BackoffDelay(numDelivered int) time.Duration {
 	return delay
 }
 
+// maxPhotoCaptionLen is Telegram's limit on sendPhoto captions — shorter
+// than sendMessage's 4096-char text limit, so a message that doesn't fit
+// falls back to a plain text message instead of a captioned photo.
+const maxPhotoCaptionLen = 1024
+
 // SendTelegramMessage sends a message to Telegram and returns the message_id on success.
 func SendTelegramMessage(ctx context.Context, botToken, chatID string, disc event.Discovered) (string, error) {
+	// Use a client with timeout to prevent blocking indefinitely
+	// Set to 20s to leave margin before JetStream's 30s AckWait timeout
+	client := &http.Client{Timeout: 20 * time.Second}
+	apiBaseURL := fmt.Sprintf("https://api.telegram.org/bot%s", botToken)
+	return sendTelegramMessage(ctx, client, apiBaseURL, chatID, disc)
+}
+
+// sendTelegramMessage sends disc to chatID via the Telegram Bot API rooted
+// at apiBaseURL, returning the resulting message_id. When disc has an
+// image and the formatted message fits Telegram's caption limit, it's sent
+// as a photo with the event details as its caption (so the poster shows
+// inline in the chat); otherwise it falls back to a plain text message.
+func sendTelegramMessage(ctx context.Context, client *http.Client, apiBaseURL, chatID string, disc event.Discovered) (string, error) {
 	// Format message with escaped user-controlled text
 	// Using HTML parse mode and escaping HTML special characters
 	messageText := formatTelegramMessage(disc)
 
-	// Build request
-	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", botToken)
-
+	method := "sendMessage"
 	data := url.Values{
 		"chat_id":    {chatID},
 		"text":       {messageText},
 		"parse_mode": {"HTML"},
 	}
+
+	if disc.ImageURL != "" && len(messageText) <= maxPhotoCaptionLen {
+		method = "sendPhoto"
+		data = url.Values{
+			"chat_id":    {chatID},
+			"photo":      {disc.ImageURL},
+			"caption":    {messageText},
+			"parse_mode": {"HTML"},
+		}
+	}
+
+	apiURL := fmt.Sprintf("%s/%s", apiBaseURL, method)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, strings.NewReader(data.Encode()))
 	if err != nil {
@@ -68,9 +96,6 @@ func SendTelegramMessage(ctx context.Context, botToken, chatID string, disc even
 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	// Use a client with timeout to prevent blocking indefinitely
-	// Set to 20s to leave margin before JetStream's 30s AckWait timeout
-	client := &http.Client{Timeout: 20 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("http request failed: %w", err)
@@ -133,7 +158,7 @@ func formatTelegramMessage(disc event.Discovered) string {
 
 	if disc.EventDate != "" {
 		buf.WriteString("📅 ")
-		buf.WriteString(htmlEscape(disc.EventDate))
+		buf.WriteString(htmlEscape(strings.Replace(disc.EventDate, "T", " ", 1)))
 		buf.WriteString("\n")
 	}
 

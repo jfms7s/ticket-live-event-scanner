@@ -21,7 +21,7 @@ type Discovered struct {
 	Title     string `json:"title"`
 	Venue     string `json:"venue,omitempty"`
 	Category  string `json:"category,omitempty"`
-	EventDate string `json:"event_date,omitempty"` // YYYY-MM-DD
+	EventDate string `json:"event_date,omitempty"` // YYYY-MM-DD or YYYY-MM-DDTHH:MM
 	URL       string `json:"url"`
 	ImageURL  string `json:"image_url,omitempty"`
 	Reason    string `json:"reason"`

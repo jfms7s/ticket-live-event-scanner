@@ -129,6 +129,8 @@ func main() {
 	mux.HandleFunc("GET /api/events", app.handleListEvents)
 	mux.HandleFunc("GET /api/events/{id}", app.handleGetEvent)
 	mux.HandleFunc("POST /api/events/{id}/retrigger", app.handleRetrigger)
+	mux.HandleFunc("PATCH /api/events/{id}/purchased", app.handleSetPurchased)
+	mux.HandleFunc("DELETE /api/events/{id}", app.handleDeleteEvent)
 
 	// Notifications API
 	mux.HandleFunc("GET /api/notifications", app.handleListNotifications)
@@ -315,7 +317,7 @@ func corsMiddleware(next http.Handler, corsOrigin string) http.Handler {
 		// Only set CORS headers if a specific origin is configured
 		if corsOrigin != "" {
 			w.Header().Set("Access-Control-Allow-Origin", corsOrigin)
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		}
 

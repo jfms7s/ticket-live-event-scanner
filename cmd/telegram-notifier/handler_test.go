@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -167,13 +167,97 @@ func TestSendTelegramMessageSuccess(t *testing.T) {
 	}
 
 	// Manually call the API using a custom client
-	messageID, err := sendTelegramMessageWithClient(ctx, http.DefaultClient, server.URL, "test-chat-id", disc)
+	messageID, err := sendTelegramMessage(ctx, http.DefaultClient, server.URL, "test-chat-id", disc)
 	if err != nil {
 		t.Fatalf("SendTelegramMessage failed: %v", err)
 	}
 
 	if messageID != "12345" {
 		t.Errorf("expected messageID '12345', got '%s'", messageID)
+	}
+}
+
+// TestSendTelegramMessageWithImage tests that an event with an image is
+// sent via sendPhoto (poster inline) with the formatted message as its
+// caption, rather than a plain sendMessage.
+func TestSendTelegramMessageWithImage(t *testing.T) {
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("failed to parse form: %v", err)
+		}
+
+		if r.FormValue("photo") != "https://example.com/poster.jpg" {
+			t.Errorf("expected photo URL in form, got %q", r.FormValue("photo"))
+		}
+		if r.FormValue("caption") == "" {
+			t.Error("expected non-empty caption")
+		}
+		if r.FormValue("text") != "" {
+			t.Errorf("expected no 'text' field on a photo message, got %q", r.FormValue("text"))
+		}
+
+		resp := map[string]interface{}{
+			"ok":     true,
+			"result": map[string]interface{}{"message_id": int64(999)},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	disc := event.Discovered{
+		EventID:  123,
+		Title:    "Test Event",
+		Venue:    "Test Venue",
+		URL:      "https://example.com/event",
+		ImageURL: "https://example.com/poster.jpg",
+	}
+
+	messageID, err := sendTelegramMessage(ctx, http.DefaultClient, server.URL, "test-chat-id", disc)
+	if err != nil {
+		t.Fatalf("sendTelegramMessage failed: %v", err)
+	}
+	if messageID != "999" {
+		t.Errorf("expected messageID '999', got '%s'", messageID)
+	}
+	if gotPath != "/sendPhoto" {
+		t.Errorf("expected request to /sendPhoto, got %q", gotPath)
+	}
+}
+
+// TestSendTelegramMessageImageCaptionTooLong tests that an event with an
+// image but a message too long for Telegram's photo caption limit falls
+// back to a plain sendMessage instead of failing outright.
+func TestSendTelegramMessageImageCaptionTooLong(t *testing.T) {
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		resp := map[string]interface{}{
+			"ok":     true,
+			"result": map[string]interface{}{"message_id": int64(1)},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	disc := event.Discovered{
+		EventID:  123,
+		Title:    strings.Repeat("A very long title ", 100), // well over 1024 chars
+		URL:      "https://example.com/event",
+		ImageURL: "https://example.com/poster.jpg",
+	}
+
+	if _, err := sendTelegramMessage(ctx, http.DefaultClient, server.URL, "test-chat-id", disc); err != nil {
+		t.Fatalf("sendTelegramMessage failed: %v", err)
+	}
+	if gotPath != "/sendMessage" {
+		t.Errorf("expected fallback to /sendMessage for an oversized caption, got %q", gotPath)
 	}
 }
 
@@ -192,7 +276,7 @@ func TestSendTelegramMessageHTTPError(t *testing.T) {
 		URL:     "https://example.com/event",
 	}
 
-	messageID, err := sendTelegramMessageWithClient(ctx, http.DefaultClient, server.URL, "test-chat-id", disc)
+	messageID, err := sendTelegramMessage(ctx, http.DefaultClient, server.URL, "test-chat-id", disc)
 	if err == nil {
 		t.Errorf("expected error, got success with messageID %s", messageID)
 	}
@@ -221,7 +305,7 @@ func TestSendTelegramMessageOKFalse(t *testing.T) {
 		URL:     "https://example.com/event",
 	}
 
-	messageID, err := sendTelegramMessageWithClient(ctx, http.DefaultClient, server.URL, "test-chat-id", disc)
+	messageID, err := sendTelegramMessage(ctx, http.DefaultClient, server.URL, "test-chat-id", disc)
 	if err == nil {
 		t.Errorf("expected error when ok=false, got success with messageID %s", messageID)
 	}
@@ -246,7 +330,7 @@ func TestSendTelegramMessageMalformedJSON(t *testing.T) {
 		URL:     "https://example.com/event",
 	}
 
-	messageID, err := sendTelegramMessageWithClient(ctx, http.DefaultClient, server.URL, "test-chat-id", disc)
+	messageID, err := sendTelegramMessage(ctx, http.DefaultClient, server.URL, "test-chat-id", disc)
 	if err == nil {
 		t.Errorf("expected error for malformed JSON, got success with messageID %s", messageID)
 	}
@@ -292,6 +376,26 @@ func TestFormatTelegramMessage(t *testing.T) {
 
 	if !contains(msg, "2026-08-22") {
 		t.Error("message should contain event date")
+	}
+}
+
+// TestFormatTelegramMessageEventDateWithTime tests that a date+time
+// EventDate (e.g. hub sessions with a fixed start time) renders as
+// "date time" instead of the raw "date<T>time".
+func TestFormatTelegramMessageEventDateWithTime(t *testing.T) {
+	disc := event.Discovered{
+		Title:     "Test Session",
+		EventDate: "2026-09-04T18:30",
+		URL:       "https://example.com/event",
+	}
+
+	msg := formatTelegramMessage(disc)
+
+	if !contains(msg, "2026-09-04 18:30") {
+		t.Errorf("expected message to contain '2026-09-04 18:30', got: %s", msg)
+	}
+	if contains(msg, "2026-09-04T18:30") {
+		t.Errorf("expected raw 'T' separator to be replaced, got: %s", msg)
 	}
 }
 
@@ -389,79 +493,6 @@ func contains2(s, substr string) bool {
 		}
 	}
 	return false
-}
-
-// sendTelegramMessageWithClient is a test helper that allows injecting a custom HTTP client and URL
-func sendTelegramMessageWithClient(ctx context.Context, client *http.Client, baseURL, chatID string, disc event.Discovered) (string, error) {
-	messageText := formatTelegramMessage(disc)
-
-	req, err := http.NewRequestWithContext(ctx, "POST", baseURL+"/sendMessage", nil)
-	if err != nil {
-		return "", fmt.Errorf("create request: %w", err)
-	}
-
-	// Manually set form data
-	data := make([]byte, 0)
-	data = append(data, []byte("chat_id=")...)
-	data = append(data, []byte(chatID)...)
-	data = append(data, []byte("&text=")...)
-	data = append(data, []byte(messageText)...)
-	data = append(data, []byte("&parse_mode=HTML")...)
-
-	req.Body = io.NopCloser(&simpleReader{data: data, pos: 0})
-	req.ContentLength = int64(len(data))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("http request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("read response body: %w", err)
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("telegram API returned %d: %s", resp.StatusCode, string(body))
-	}
-
-	var telegramResp struct {
-		OK     bool `json:"ok"`
-		Error  int  `json:"error_code"`
-		Result struct {
-			MessageID int64 `json:"message_id"`
-		} `json:"result"`
-	}
-
-	if err := json.Unmarshal(body, &telegramResp); err != nil {
-		return "", fmt.Errorf("parse telegram response: %w", err)
-	}
-
-	if !telegramResp.OK {
-		if telegramResp.Error != 0 {
-			return "", fmt.Errorf("telegram error code %d", telegramResp.Error)
-		}
-		return "", fmt.Errorf("telegram API returned ok=false")
-	}
-
-	return fmt.Sprintf("%d", telegramResp.Result.MessageID), nil
-}
-
-// simpleReader is a simple io.Reader for testing
-type simpleReader struct {
-	data []byte
-	pos  int
-}
-
-func (r *simpleReader) Read(p []byte) (n int, err error) {
-	if r.pos >= len(r.data) {
-		return 0, io.EOF
-	}
-	n = copy(p, r.data[r.pos:])
-	r.pos += n
-	return n, nil
 }
 
 // Mock jetstream.Msg for testing

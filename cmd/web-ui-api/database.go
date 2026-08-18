@@ -158,7 +158,7 @@ func updateNotificationFailed(ctx context.Context, db *sql.DB, failed *event.Not
 // status can be "" (all), "active", or "finished".
 func listEvents(ctx context.Context, db *sql.DB, status string) ([]EventResponse, error) {
 	query := `
-		SELECT id, slug, title, venue, category, event_date, url, image_url, discovered_at
+		SELECT id, slug, title, venue, category, event_date, url, image_url, discovered_at, purchased
 		FROM events
 		ORDER BY discovered_at DESC
 	`
@@ -180,6 +180,7 @@ func listEvents(ctx context.Context, db *sql.DB, status string) ([]EventResponse
 		slug, title, url                     string
 		venue, category, eventDate, imageURL *string
 		discoveredAtStr                      string
+		purchased                            bool
 		computedStatus                       string
 	}
 	var bases []eventBase
@@ -187,7 +188,7 @@ func listEvents(ctx context.Context, db *sql.DB, status string) ([]EventResponse
 
 	for rows.Next() {
 		var b eventBase
-		if err := rows.Scan(&b.id, &b.slug, &b.title, &b.venue, &b.category, &b.eventDate, &b.url, &b.imageURL, &b.discoveredAtStr); err != nil {
+		if err := rows.Scan(&b.id, &b.slug, &b.title, &b.venue, &b.category, &b.eventDate, &b.url, &b.imageURL, &b.discoveredAtStr, &b.purchased); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("scan row: %w", err)
 		}
@@ -222,6 +223,7 @@ func listEvents(ctx context.Context, db *sql.DB, status string) ([]EventResponse
 			URL:           b.url,
 			ImageURL:      b.imageURL,
 			DiscoveredAt:  b.discoveredAtStr,
+			Purchased:     b.purchased,
 			Status:        b.computedStatus,
 			Notifications: notifs,
 		})
@@ -233,7 +235,7 @@ func listEvents(ctx context.Context, db *sql.DB, status string) ([]EventResponse
 // getEvent returns a single event by ID with its notifications.
 func getEvent(ctx context.Context, db *sql.DB, id int64) (*EventResponse, error) {
 	query := `
-		SELECT id, slug, title, venue, category, event_date, url, image_url, discovered_at
+		SELECT id, slug, title, venue, category, event_date, url, image_url, discovered_at, purchased
 		FROM events
 		WHERE id = ?
 	`
@@ -241,8 +243,9 @@ func getEvent(ctx context.Context, db *sql.DB, id int64) (*EventResponse, error)
 	var slug, title, url string
 	var venue, category, eventDate, imageURL *string
 	var discoveredAtStr string
+	var purchased bool
 
-	if err := db.QueryRowContext(ctx, query, id).Scan(&id, &slug, &title, &venue, &category, &eventDate, &url, &imageURL, &discoveredAtStr); err != nil {
+	if err := db.QueryRowContext(ctx, query, id).Scan(&id, &slug, &title, &venue, &category, &eventDate, &url, &imageURL, &discoveredAtStr, &purchased); err != nil {
 		return nil, err
 	}
 
@@ -265,9 +268,65 @@ func getEvent(ctx context.Context, db *sql.DB, id int64) (*EventResponse, error)
 		URL:           url,
 		ImageURL:      imageURL,
 		DiscoveredAt:  discoveredAtStr,
+		Purchased:     purchased,
 		Status:        computedStatus,
 		Notifications: notifs,
 	}, nil
+}
+
+// setEventPurchased updates the purchased flag for a single event. It
+// returns sql.ErrNoRows if no event with that ID exists.
+func setEventPurchased(ctx context.Context, db *sql.DB, id int64, purchased bool) error {
+	result, err := db.ExecContext(ctx, `UPDATE events SET purchased = ? WHERE id = ?`, purchased, id)
+	if err != nil {
+		return fmt.Errorf("update purchased: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+
+	return nil
+}
+
+// deleteEvent removes an event and its notifications from the database.
+// It returns sql.ErrNoRows if no event with that ID exists. Notifications
+// are deleted explicitly in the same transaction since SQLite foreign keys
+// are not enforced here (no PRAGMA foreign_keys=ON), so there is no
+// cascading delete to rely on.
+func deleteEvent(ctx context.Context, db *sql.DB, id int64) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM notifications WHERE event_id = ?`, id); err != nil {
+		return fmt.Errorf("delete notifications: %w", err)
+	}
+
+	result, err := tx.ExecContext(ctx, `DELETE FROM events WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete event: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+
+	return nil
 }
 
 // getNotificationsForEvent returns all notifications for a given event (without event_id field),
@@ -389,13 +448,14 @@ func listNotifications(ctx context.Context, db *sql.DB, status string) ([]Notifi
 }
 
 // dateLayouts are tried in order when parsing a stored event_date. The
-// column is declared DATE and written as plain "2006-01-02" text, but some
-// SQLite driver implementations (observed with modernc.org/sqlite, used in
-// tests) auto-detect DATE-typed columns and hand back RFC3339 on Scan
-// instead of the raw text that was inserted. Trying both keeps this correct
-// regardless of which behavior the driver in use (test or production)
-// exhibits.
-var dateLayouts = []string{"2006-01-02", time.RFC3339}
+// column is declared DATE and written as plain "2006-01-02" or
+// "2006-01-02T15:04" text (the scraper includes a time when ticketline.pt
+// gives one), but some SQLite driver implementations (observed with
+// modernc.org/sqlite, used in tests) auto-detect DATE-typed columns and
+// hand back RFC3339 on Scan instead of the raw text that was inserted.
+// Trying all three keeps this correct regardless of which behavior the
+// driver in use (test or production) exhibits.
+var dateLayouts = []string{"2006-01-02", "2006-01-02T15:04", time.RFC3339}
 
 // computeStatus computes whether an event is "active" or "finished" based on its event_date.
 func computeStatus(eventDate *string, now time.Time) string {

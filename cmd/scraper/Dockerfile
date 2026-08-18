@@ -29,7 +29,13 @@ WORKDIR /app
 COPY --from=builder /build/scraper /app/scraper
 
 # Non-root user
-RUN addgroup -D -g 1000 scraper && adduser -D -u 1000 scraper -G scraper
+RUN addgroup -g 1000 scraper && adduser -D -u 1000 scraper -G scraper
+
+# /data is used for a local libSQL file DB in docker-compose (Turso is used
+# in k8s instead); create it here so it's owned by the non-root user once a
+# volume is mounted over it.
+RUN mkdir -p /data && chown 1000:1000 /data
+
 USER scraper
 
 ENTRYPOINT ["/app/scraper"]

@@ -1,8 +1,57 @@
 package main
 
 import (
+	"os"
+	"reflect"
 	"testing"
 )
+
+// TestHubPageSlug tests that hubPageSlug accepts both full URLs and bare
+// slugs, ignoring any domain in the input.
+func TestHubPageSlug(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"auchan-live-academia-maia-98164", "auchan-live-academia-maia-98164"},
+		{"https://www.ticketline.pt/evento/auchan-live-academia-maia-98164", "auchan-live-academia-maia-98164"},
+		{"https://www.ticketline.pt/evento/auchan-live-academia-aveiro-98167/", "auchan-live-academia-aveiro-98167"},
+		{"/evento/auchan-live-academia-maia-98164", "auchan-live-academia-maia-98164"},
+		{"", ""},
+	}
+
+	for _, tc := range tests {
+		if got := hubPageSlug(tc.input); got != tc.expected {
+			t.Errorf("hubPageSlug(%q) = %q, want %q", tc.input, got, tc.expected)
+		}
+	}
+}
+
+// TestGetEnvHubPages tests parsing a comma-separated TICKETLINE_HUB_PAGES
+// value, and falling back to the default when unset.
+func TestGetEnvHubPages(t *testing.T) {
+	const key = "TICKETLINE_HUB_PAGES_TEST"
+	defaultVal := []string{"default-slug-1"}
+
+	t.Run("unset falls back to default", func(t *testing.T) {
+		os.Unsetenv(key)
+		got := getEnvHubPages(key, defaultVal)
+		if !reflect.DeepEqual(got, defaultVal) {
+			t.Errorf("getEnvHubPages() = %v, want %v", got, defaultVal)
+		}
+	})
+
+	t.Run("mixed full URLs and bare slugs", func(t *testing.T) {
+		os.Setenv(key, "https://www.ticketline.pt/evento/auchan-live-academia-maia-98164, auchan-live-academia-aveiro-98167")
+		defer os.Unsetenv(key)
+
+		got := getEnvHubPages(key, defaultVal)
+		want := []string{"auchan-live-academia-maia-98164", "auchan-live-academia-aveiro-98167"}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("getEnvHubPages() = %v, want %v", got, want)
+		}
+	})
+}
 
 // TestCacheURLResponseLRUNoDuplicate tests that caching the same URL twice
 // doesn't add it to cacheOrder twice
@@ -88,49 +137,6 @@ func TestCacheURLResponseLRUUpdateOrder(t *testing.T) {
 		}
 	} else {
 		t.Errorf("Expected url2 to be in cache")
-	}
-}
-
-// TestMonthNormalizationSimple tests basic month arithmetic normalization
-func TestMonthNormalizationSimple(t *testing.T) {
-	tests := []struct {
-		currentMonth int
-		currentYear  int
-		offset       int
-		expectMonth  int
-		expectYear   int
-	}{
-		// Same month/year
-		{1, 2026, 0, 1, 2026},
-		{6, 2026, 0, 6, 2026},
-		{12, 2026, 0, 12, 2026},
-
-		// Within same year
-		{1, 2026, 1, 2, 2026},
-		{6, 2026, 3, 9, 2026},
-		{11, 2026, 1, 12, 2026},
-
-		// Year rollover - offset crosses 12
-		{8, 2026, 5, 1, 2027}, // Aug + 5 = Jan next year
-		{12, 2026, 1, 1, 2027},
-		{1, 2026, 12, 1, 2027},
-
-		// Large offset >= 13 (AgendaMonthsAhead >= 13)
-		{1, 2026, 13, 2, 2027}, // 12 months + 1
-		{1, 2026, 24, 1, 2028}, // 24 months = 2 years
-		{8, 2026, 25, 9, 2028}, // Aug + 25 months = Sep 2028
-		{6, 2026, 18, 12, 2027}, // Jun + 18 = Dec 2027
-	}
-
-	for _, tc := range tests {
-		month, year := normalizeMonth(tc.currentMonth, tc.currentYear, tc.offset)
-
-		if month != tc.expectMonth || year != tc.expectYear {
-			t.Errorf("Month normalization for currentMonth=%d, currentYear=%d, offset=%d: expected %d/%d, got %d/%d",
-				tc.currentMonth, tc.currentYear, tc.offset,
-				tc.expectMonth, tc.expectYear,
-				month, year)
-		}
 	}
 }
 

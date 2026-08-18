@@ -54,6 +54,8 @@ spec:
             env:
             - name: TICKETLINE_BASE_URL
               value: "https://www.ticketline.pt"
+            - name: TICKETLINE_HUB_PAGES
+              value: "auchan-live-academia-maia-98164,auchan-live-academia-aveiro-98167"
             - name: NATS_URL
               value: "nats://nats:4222"
             - name: TURSO_DATABASE_URL
@@ -70,8 +72,6 @@ spec:
               value: "ticket-live-event-scanner/0.1 (personal project; contact: jfms7s@gmail.com)"
             - name: REQUEST_DELAY_MS
               value: "1500"
-            - name: AGENDA_MONTHS_AHEAD
-              value: "2"
             resources:
               requests:
                 cpu: 50m

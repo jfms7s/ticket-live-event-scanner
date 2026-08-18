@@ -28,6 +28,11 @@ WORKDIR /app
 # Copy the binary from the builder
 COPY --from=builder /build/web-ui-api .
 
+# /data is used for a local libSQL file DB in docker-compose (Turso is used
+# in k8s instead); create it here so it's owned by the non-root user once a
+# volume is mounted over it.
+RUN mkdir -p /data && chown 1000:1000 /data
+
 # Run as non-root user (defense-in-depth; k8s securityContext also enforces this)
 USER 1000:1000
 

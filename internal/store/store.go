@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	_ "github.com/tursodatabase/libsql-client-go/libsql"
+	_ "modernc.org/sqlite"
 )
 
 // Schema is applied with CREATE TABLE IF NOT EXISTS, so it is safe to run
@@ -24,7 +25,8 @@ CREATE TABLE IF NOT EXISTS events (
     event_date    DATE,
     url           TEXT NOT NULL,
     image_url     TEXT,
-    discovered_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    discovered_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    purchased     BOOLEAN NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS notifications (
@@ -66,5 +68,16 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, Schema); err != nil {
 		return fmt.Errorf("migrate schema: %w", err)
 	}
+
+	// The "purchased" column was added after events already existed in
+	// production, so CREATE TABLE IF NOT EXISTS above is a no-op there —
+	// backfill it with ALTER TABLE, tolerating the "already applied" case
+	// since ALTER TABLE has no IF NOT EXISTS form for ADD COLUMN in SQLite.
+	if _, err := db.ExecContext(ctx, `ALTER TABLE events ADD COLUMN purchased BOOLEAN NOT NULL DEFAULT 0`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("migrate schema: add purchased column: %w", err)
+		}
+	}
+
 	return nil
 }

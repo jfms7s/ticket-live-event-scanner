@@ -1,0 +1,94 @@
+# Local development stack. Mirrors deploy/k8s but swaps Turso for a local
+# libSQL file DB (via the same libsql-client-go driver, "file:" DSN) so the
+# stack runs with no external cloud dependencies besides Telegram.
+#
+# Usage:
+#   cp .env.example .env   # fill in TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID
+#   docker compose up --build
+#   docker compose run --rm scraper   # scraper is a CronJob in k8s; run on demand here
+
+services:
+  nats:
+    image: nats:2-alpine
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    ports:
+      - "4222:4222"
+    volumes:
+      - nats-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8222/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  web-ui-api:
+    build:
+      context: .
+      dockerfile: cmd/web-ui-api/Dockerfile
+    depends_on:
+      nats:
+        condition: service_healthy
+    environment:
+      NATS_URL: nats://nats:4222
+      TURSO_DATABASE_URL: file:/data/local.db
+      TURSO_AUTH_TOKEN: local
+      LISTEN_ADDR: :8080
+      CORS_ORIGIN: "*"
+    volumes:
+      - api-data:/data
+    ports:
+      - "8080:8080"
+
+  web-ui-frontend:
+    build:
+      context: web/frontend
+      dockerfile: Dockerfile
+    depends_on:
+      - web-ui-api
+    environment:
+      API_BASE_URL: http://localhost:8080
+      PORT: "3000"
+    ports:
+      - "3000:3000"
+
+  telegram-notifier:
+    build:
+      context: .
+      dockerfile: cmd/telegram-notifier/Dockerfile
+    depends_on:
+      nats:
+        condition: service_healthy
+    environment:
+      NATS_URL: nats://nats:4222
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?set TELEGRAM_BOT_TOKEN in .env}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:?set TELEGRAM_CHAT_ID in .env}
+
+  scraper:
+    build:
+      context: .
+      dockerfile: cmd/scraper/Dockerfile
+    depends_on:
+      nats:
+        condition: service_healthy
+    environment:
+      TICKETLINE_BASE_URL: https://www.ticketline.pt
+      # Comma-separated list of hub pages to track — full URLs or bare
+      # slugs both work (the domain, if given, is ignored in favor of
+      # TICKETLINE_BASE_URL above). Defaults to these same two pages if
+      # unset.
+      TICKETLINE_HUB_PAGES: >-
+        https://www.ticketline.pt/evento/auchan-live-academia-maia-98164,
+        https://www.ticketline.pt/evento/auchan-live-academia-aveiro-98167
+      NATS_URL: nats://nats:4222
+      TURSO_DATABASE_URL: file:/data/local.db
+      TURSO_AUTH_TOKEN: local
+      USER_AGENT: "ticket-live-event-scanner/0.1"
+      REQUEST_DELAY_MS: "1500"
+    volumes:
+      - api-data:/data
+    profiles:
+      - tools
+
+volumes:
+  nats-data:
+  api-data:

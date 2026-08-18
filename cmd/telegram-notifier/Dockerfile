@@ -1,5 +1,5 @@
 # Multi-stage build for telegram-notifier
-FROM golang:1.22-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /build
 
@@ -25,7 +25,7 @@ RUN apk --no-cache add ca-certificates
 WORKDIR /app
 
 # Create non-root user
-RUN addgroup -g 1000 appgroup && adduser -u 1000 -G appgroup -s /sbin/nologin appuser
+RUN addgroup -g 1000 appgroup && adduser -D -u 1000 -G appgroup -s /sbin/nologin appuser
 
 # Copy the binary from builder
 COPY --from=builder /build/telegram-notifier /app/telegram-notifier

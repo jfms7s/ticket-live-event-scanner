@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -55,7 +57,8 @@ func setupTestSchema(ctx context.Context, db *sql.DB) error {
 			event_date    DATE,
 			url           TEXT NOT NULL,
 			image_url     TEXT,
-			discovered_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+			discovered_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			purchased     BOOLEAN NOT NULL DEFAULT 0
 		)`,
 		`CREATE TABLE IF NOT EXISTS notifications (
 			id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -496,6 +499,200 @@ func TestRetriggerSuccess(t *testing.T) {
 	}
 }
 
+// TestSetPurchasedNotFound tests marking a non-existent event as purchased.
+func TestSetPurchasedNotFound(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	app := &App{db: db, js: NewMockJetStream()}
+	mux := http.NewServeMux()
+	mux.HandleFunc("PATCH /api/events/{id}/purchased", app.handleSetPurchased)
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodPatch, server.URL+"/api/events/99999/purchased", strings.NewReader(`{"purchased":true}`))
+	if err != nil {
+		t.Fatalf("Failed to build request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Failed to make request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("Expected status 404, got %d", resp.StatusCode)
+	}
+}
+
+// TestSetPurchasedSuccess tests marking an existing event as purchased and un-purchased.
+func TestSetPurchasedSuccess(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO events (id, slug, title, venue, category, event_date, url, image_url, discovered_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, 98164, "test-event", "Test Event", "", "", "", "http://example.com", "", "2026-08-17T09:00:00Z")
+	if err != nil {
+		t.Fatalf("Failed to insert test event: %v", err)
+	}
+
+	app := &App{db: db, js: NewMockJetStream()}
+	mux := http.NewServeMux()
+	mux.HandleFunc("PATCH /api/events/{id}/purchased", app.handleSetPurchased)
+	mux.HandleFunc("GET /api/events/{id}", app.handleGetEvent)
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	setPurchased := func(purchased bool) *http.Response {
+		body := fmt.Sprintf(`{"purchased":%t}`, purchased)
+		req, err := http.NewRequest(http.MethodPatch, server.URL+"/api/events/98164/purchased", strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("Failed to build request: %v", err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("Failed to make request: %v", err)
+		}
+		return resp
+	}
+
+	resp := setPurchased(true)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", resp.StatusCode)
+	}
+
+	getResp, err := http.Get(server.URL + "/api/events/98164")
+	if err != nil {
+		t.Fatalf("Failed to get event: %v", err)
+	}
+	defer getResp.Body.Close()
+	var ev EventResponse
+	if err := json.NewDecoder(getResp.Body).Decode(&ev); err != nil {
+		t.Fatalf("Failed to decode event: %v", err)
+	}
+	if !ev.Purchased {
+		t.Fatalf("Expected purchased=true after PATCH, got false")
+	}
+
+	resp2 := setPurchased(false)
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", resp2.StatusCode)
+	}
+
+	getResp2, err := http.Get(server.URL + "/api/events/98164")
+	if err != nil {
+		t.Fatalf("Failed to get event: %v", err)
+	}
+	defer getResp2.Body.Close()
+	var ev2 EventResponse
+	if err := json.NewDecoder(getResp2.Body).Decode(&ev2); err != nil {
+		t.Fatalf("Failed to decode event: %v", err)
+	}
+	if ev2.Purchased {
+		t.Fatalf("Expected purchased=false after second PATCH, got true")
+	}
+}
+
+// TestDeleteEventNotFound tests deleting a non-existent event.
+func TestDeleteEventNotFound(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	app := &App{db: db, js: NewMockJetStream()}
+	mux := http.NewServeMux()
+	mux.HandleFunc("DELETE /api/events/{id}", app.handleDeleteEvent)
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodDelete, server.URL+"/api/events/99999", nil)
+	if err != nil {
+		t.Fatalf("Failed to build request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Failed to make request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("Expected status 404, got %d", resp.StatusCode)
+	}
+}
+
+// TestDeleteEventSuccess tests deleting an event along with its notifications.
+func TestDeleteEventSuccess(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO events (id, slug, title, venue, category, event_date, url, image_url, discovered_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, 98164, "test-event", "Test Event", "", "", "", "http://example.com", "", "2026-08-17T09:00:00Z")
+	if err != nil {
+		t.Fatalf("Failed to insert test event: %v", err)
+	}
+
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO notifications (event_id, status, triggered_by, attempted_at)
+		VALUES (?, 'sent', 'scraper', ?)
+	`, 98164, "2026-08-17T10:00:00Z")
+	if err != nil {
+		t.Fatalf("Failed to insert notification: %v", err)
+	}
+
+	app := &App{db: db, js: NewMockJetStream()}
+	mux := http.NewServeMux()
+	mux.HandleFunc("DELETE /api/events/{id}", app.handleDeleteEvent)
+	mux.HandleFunc("GET /api/events/{id}", app.handleGetEvent)
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodDelete, server.URL+"/api/events/98164", nil)
+	if err != nil {
+		t.Fatalf("Failed to build request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Failed to make request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("Expected status 204, got %d", resp.StatusCode)
+	}
+
+	getResp, err := http.Get(server.URL + "/api/events/98164")
+	if err != nil {
+		t.Fatalf("Failed to get event: %v", err)
+	}
+	defer getResp.Body.Close()
+	if getResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("Expected event to be gone (404), got %d", getResp.StatusCode)
+	}
+
+	var notifCount int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM notifications WHERE event_id = ?`, 98164).Scan(&notifCount); err != nil {
+		t.Fatalf("Failed to count notifications: %v", err)
+	}
+	if notifCount != 0 {
+		t.Fatalf("Expected notifications to be deleted, found %d", notifCount)
+	}
+}
+
 // TestUpdateMostRecentPendingRow tests the critical logic of updating the most recent pending row.
 func TestUpdateMostRecentPendingRow(t *testing.T) {
 	db := setupTestDB(t)
@@ -798,5 +995,23 @@ func TestDiscoveryIdempotencyWithExistingPending(t *testing.T) {
 	}
 	if scraperCount != 1 {
 		t.Fatalf("Expected 1 notification with triggered_by='scraper', got %d", scraperCount)
+	}
+}
+
+// TestComputeStatusEventDateWithTime verifies computeStatus can parse the
+// "YYYY-MM-DDTHH:MM" event_date format the scraper stores for hub sessions
+// that have a fixed start time (no seconds/timezone offset), not just plain
+// "YYYY-MM-DD".
+func TestComputeStatusEventDateWithTime(t *testing.T) {
+	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+
+	futureToday := "2026-09-04T18:30"
+	if status := computeStatus(&futureToday, now); status != "active" {
+		t.Errorf("computeStatus(%q) = %q, want %q", futureToday, status, "active")
+	}
+
+	past := "2026-09-03T18:30"
+	if status := computeStatus(&past, now); status != "finished" {
+		t.Errorf("computeStatus(%q) = %q, want %q", past, status, "finished")
 	}
 }

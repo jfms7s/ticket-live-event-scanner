@@ -4,7 +4,7 @@ const {
   getLatestNotificationStatus,
   formatDate,
   escapeHtml,
-} = require('../utils.js');
+} = require('../public/utils.js');
 
 test('getLatestNotificationStatus - returns "none" for empty notifications array', () => {
   const result = getLatestNotificationStatus([]);
@@ -52,6 +52,33 @@ test('formatDate - formats ISO datetime', () => {
   const result = formatDate('2026-08-17T10:00:00Z');
   assert.strictEqual(typeof result, 'string');
   assert.match(result, /Aug 17, 2026/);
+});
+
+test('formatDate - shows time for the scraper\'s "YYYY-MM-DDTHH:MM" format', () => {
+  const result = formatDate('2026-08-22T11:30');
+  assert.strictEqual(result, 'Aug 22, 2026, 11:30');
+});
+
+test('formatDate - shows time for RFC3339 with seconds and offset', () => {
+  const result = formatDate('2026-08-22T11:30:00Z');
+  assert.strictEqual(result, 'Aug 22, 2026, 11:30');
+});
+
+test('formatDate - does not shift the hour based on the browser timezone', () => {
+  // A naive "no offset" datetime must display its literal digits, not the
+  // browser-local interpretation `new Date()` would otherwise apply.
+  const result = formatDate('2026-08-22T23:45');
+  assert.strictEqual(result, 'Aug 22, 2026, 23:45');
+});
+
+test('formatDate - hides a bare "00:00" time (date-only DB round-trip artifact)', () => {
+  const result = formatDate('2026-08-29T00:00:00Z');
+  assert.strictEqual(result, 'Aug 29, 2026');
+});
+
+test('formatDate - date-only string has no time suffix', () => {
+  const result = formatDate('2026-08-22');
+  assert.strictEqual(result, 'Aug 22, 2026');
 });
 
 test('escapeHtml - escapes ampersand', () => {

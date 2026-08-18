@@ -80,11 +80,16 @@ func extractEventFromCard(n *html.Node) *event.Discovered {
 // extractItemprops finds all itemprop elements and their values.
 func extractItemprops(n *html.Node) map[string]string {
 	props := make(map[string]string)
-	extractItempropsRecursive(n, props)
+	extractItempropsRecursive(n, props, true)
 	return props
 }
 
-func extractItempropsRecursive(n *html.Node, props map[string]string) {
+// extractItempropsRecursive walks n's subtree collecting itemprop values
+// into props. isRoot marks n as the item we're extracting properties FOR
+// (e.g. the Event card/detail node) rather than a nested item found while
+// recursing (e.g. a Place nested under "location") — see the itemscope
+// guard below for why that distinction matters.
+func extractItempropsRecursive(n *html.Node, props map[string]string, isRoot bool) {
 	if n.Type == html.ElementNode {
 		// Get itemprop attribute
 		itemprop := getAttr(n, "itemprop")
@@ -95,7 +100,12 @@ func extractItempropsRecursive(n *html.Node, props map[string]string) {
 					props["url"] = href
 				}
 			case "image":
-				if src := getAttr(n, "src"); src != "" {
+				// Cards lazy-load their poster: src is a "/static/img/blank.png"
+				// placeholder and the real URL sits in data-src-original, so
+				// that must be checked first or every image ends up broken.
+				if lazySrc := getAttr(n, "data-src-original"); lazySrc != "" {
+					props["image"] = lazySrc
+				} else if src := getAttr(n, "src"); src != "" {
 					props["image"] = src
 				} else if content := getAttr(n, "content"); content != "" {
 					props["image"] = content
@@ -106,17 +116,84 @@ func extractItempropsRecursive(n *html.Node, props map[string]string) {
 				} else if dateStr := getAttr(n, "data-date"); dateStr != "" {
 					props["startDate"] = dateStr
 				}
-			case "name", "location":
-				if text := getTextContent(n); text != "" {
-					props[itemprop] = text
+			case "name":
+				if content := getAttr(n, "content"); content != "" {
+					props["name"] = content
+				} else if text := strings.TrimSpace(getTextContent(n)); text != "" {
+					props["name"] = text
 				}
+			case "location":
+				if content := getAttr(n, "content"); content != "" {
+					props["location"] = content
+				} else if hasAttr(n, "itemscope") {
+					// Nested Place item (event detail pages, unlike search
+					// cards, wrap the venue in its own schema.org/Place with
+					// its own "name"/"address" itemprops). Use just the
+					// Place's own name rather than the full node text, which
+					// would otherwise glue the venue name and address
+					// together with no separator.
+					if venue := findNestedItemprop(n, "name"); venue != "" {
+						props["location"] = venue
+					}
+				} else if text := strings.TrimSpace(getTextContent(n)); text != "" {
+					props["location"] = text
+				}
+			}
+
+			// A non-root node that is itself a nested item (declares
+			// itemscope) marks the start of another schema.org item —
+			// e.g. the Place nested under the Event's "location" above.
+			// Its own itemprop value has just been captured; don't
+			// descend into it, or itemprops belonging to that nested item
+			// (like the Place's own "name") would land in this same flat
+			// map and silently overwrite the outer Event's same-named
+			// property. The root item node itself may also carry
+			// itemscope (and, on some pages, a stray itemprop) but must
+			// still be descended into — that's where all its properties
+			// actually live.
+			if !isRoot && hasAttr(n, "itemscope") {
+				return
 			}
 		}
 	}
 
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		extractItempropsRecursive(c, props)
+		extractItempropsRecursive(c, props, false)
 	}
+}
+
+// hasAttr reports whether the node carries the given attribute, regardless
+// of its value — needed for boolean attributes like "itemscope" where
+// getAttr's empty-string return can't distinguish "absent" from "present
+// with no value".
+func hasAttr(n *html.Node, key string) bool {
+	for _, attr := range n.Attr {
+		if attr.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+// findNestedItemprop searches n's subtree for the first element carrying
+// itemprop=key and returns its value (content attribute, else text). Unlike
+// extractItempropsRecursive, it writes nothing to a shared props map, so it
+// can safely be used to pull a single property out of a nested item without
+// risking a key collision with the outer item being extracted.
+func findNestedItemprop(n *html.Node, key string) string {
+	if n.Type == html.ElementNode && getAttr(n, "itemprop") == key {
+		if content := getAttr(n, "content"); content != "" {
+			return content
+		}
+		return strings.TrimSpace(getTextContent(n))
+	}
+
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if val := findNestedItemprop(c, key); val != "" {
+			return val
+		}
+	}
+	return ""
 }
 
 // extractCategory finds the .metadata.categories text.
@@ -214,19 +291,25 @@ func parseEventURL(urlStr string) (slug string, id int64) {
 	return "", 0
 }
 
-// validateEventDate checks if the date string is in valid YYYY-MM-DD format.
+// eventDateLayouts are the schema.org startDate formats seen on ticketline.pt
+// detail pages: a plain date for events without a fixed time, or a date+time
+// (no seconds, no timezone offset) for events with one, e.g. sessions on the
+// hub pages ("2026-09-04T18:30").
+var eventDateLayouts = []string{"2006-01-02", "2006-01-02T15:04"}
+
+// validateEventDate checks if the date string matches one of eventDateLayouts.
 // If the date is empty, it is considered valid (optional field).
-// If a date is present, it must match the YYYY-MM-DD format.
 func validateEventDate(dateStr string) error {
 	if dateStr == "" {
 		// Empty date is acceptable (optional field)
 		return nil
 	}
-	_, err := time.Parse("2006-01-02", dateStr)
-	if err != nil {
-		return fmt.Errorf("event date %q does not match YYYY-MM-DD format: %w", dateStr, err)
+	for _, layout := range eventDateLayouts {
+		if _, err := time.Parse(layout, dateStr); err == nil {
+			return nil
+		}
 	}
-	return nil
+	return fmt.Errorf("event date %q does not match any known format (%s)", dateStr, strings.Join(eventDateLayouts, " or "))
 }
 
 // parseEventDetail extracts detailed event information from an event detail page.
@@ -247,6 +330,14 @@ func parseEventDetail(body string, eventID int64) (*event.Discovered, error) {
 	evt.Venue = itemprops["location"]
 	evt.ImageURL = itemprops["image"]
 	evt.EventDate = itemprops["startDate"]
+
+	// The session card matched above (schema.org/Event, "Sessões" list)
+	// doesn't carry an itemprop="image" at all — the only poster on a
+	// detail page is the plain, non-lazy-loaded <a class="thumb"> in the
+	// page's own header. Use it when microdata didn't give us one.
+	if evt.ImageURL == "" {
+		evt.ImageURL = findEventPosterURL(doc)
+	}
 
 	// Validate event date format
 	if err := validateEventDate(evt.EventDate); err != nil {
@@ -281,7 +372,7 @@ func findFirstEventItemprops(n *html.Node) map[string]string {
 			for _, attr := range node.Attr {
 				if attr.Key == "itemtype" && strings.Contains(attr.Val, "schema.org/Event") {
 					foundEvent = true
-					extractItempropsRecursive(node, props)
+					extractItempropsRecursive(node, props, true)
 					return
 				}
 			}
@@ -298,17 +389,90 @@ func findFirstEventItemprops(n *html.Node) map[string]string {
 
 // findCategory finds the category text from the page.
 func findCategory(n *html.Node) string {
-	// Look for .metadata.categories or similar patterns
+	// Detail pages carry the event's own category tag(s) in its header as
+	// <ul class="tags_list"><li><a href="/pesquisa?category=...">FORMAÇÃO</a></li></ul>.
+	// This is the only category text actually scoped to this event — the
+	// page's "similar events" widget further down reuses the
+	// ".metadata.categories" class (checked below) for *other*, unrelated
+	// events, so that fallback can silently return the wrong category if
+	// tried first.
+	if tags := findCategoryTags(n); tags != "" {
+		return tags
+	}
+
+	// Fallback for markup without a tags_list (e.g. search/agenda cards,
+	// or a page variant without one). Not element-scoped, so only reliable
+	// when the caller has already narrowed n to a single card.
 	category := findElementWithClass(n, "metadata categories")
 	if category != "" {
 		return strings.TrimSpace(category)
 	}
 
-	// Alternative: look for category in various places
 	category = findElementWithClass(n, "category")
 	if category != "" {
 		return strings.TrimSpace(category)
 	}
 
+	return ""
+}
+
+// findCategoryTags returns the text of every <a> inside the first
+// "tags_list" element found in n's subtree, joined with ", ".
+func findCategoryTags(n *html.Node) string {
+	list := findElementNodeWithClass(n, "tags_list")
+	if list == nil {
+		return ""
+	}
+
+	var tags []string
+	var walk func(*html.Node)
+	walk = func(node *html.Node) {
+		if node.Type == html.ElementNode && node.Data == "a" {
+			if text := strings.TrimSpace(getTextContent(node)); text != "" {
+				tags = append(tags, text)
+			}
+			return
+		}
+		for c := node.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(list)
+
+	return strings.Join(tags, ", ")
+}
+
+// findElementNodeWithClass recursively finds the first element with the
+// given class (see hasClass) and returns the node itself, unlike
+// findElementWithClass which returns its text content.
+func findElementNodeWithClass(n *html.Node, className string) *html.Node {
+	if n.Type == html.ElementNode && hasClass(n, className) {
+		return n
+	}
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if result := findElementNodeWithClass(c, className); result != nil {
+			return result
+		}
+	}
+	return nil
+}
+
+// findEventPosterURL returns the event's poster image URL from a detail
+// page's own <a class="thumb" href="..."><img .../></a> in its header —
+// the only non-lazy-loaded, always-absolute image on the page. Matched
+// specifically on the <a> tag: the "similar events" widget further down
+// the same page reuses the "thumb" class on <div> wrappers around its own
+// (unrelated) lazy-loaded card images, which must not be picked up here.
+func findEventPosterURL(n *html.Node) string {
+	if n.Type == html.ElementNode && n.Data == "a" && hasClass(n, "thumb") {
+		if href := getAttr(n, "href"); href != "" {
+			return href
+		}
+	}
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if url := findEventPosterURL(c); url != "" {
+			return url
+		}
+	}
 	return ""
 }

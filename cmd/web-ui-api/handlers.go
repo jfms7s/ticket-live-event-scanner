@@ -37,6 +37,7 @@ type EventResponse struct {
 	URL           string                        `json:"url"`
 	ImageURL      *string                       `json:"image_url"`
 	DiscoveredAt  string                        `json:"discovered_at"`
+	Purchased     bool                          `json:"purchased"`
 	Status        string                        `json:"status"`
 	Notifications []NotificationInEventResponse `json:"notifications"`
 }
@@ -184,6 +185,68 @@ func (app *App) handleRetrigger(w http.ResponseWriter, r *http.Request) {
 		"event_id": id,
 		"status":   "pending",
 	})
+}
+
+// setPurchasedRequest is the JSON body for handleSetPurchased.
+type setPurchasedRequest struct {
+	Purchased bool `json:"purchased"`
+}
+
+// handleSetPurchased marks an event as purchased or not purchased.
+func (app *App) handleSetPurchased(w http.ResponseWriter, r *http.Request) {
+	idStr := r.PathValue("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, `{"error":"invalid event ID"}`, http.StatusBadRequest)
+		return
+	}
+
+	var body setPurchasedRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	err = setEventPurchased(r.Context(), app.db, id, body.Purchased)
+	if err == sql.ErrNoRows {
+		http.Error(w, `{"error":"event not found"}`, http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		log.Printf("Error setting purchased for event %d: %v", id, err)
+		http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"event_id":  id,
+		"purchased": body.Purchased,
+	})
+}
+
+// handleDeleteEvent removes an event and its notifications from the database.
+func (app *App) handleDeleteEvent(w http.ResponseWriter, r *http.Request) {
+	idStr := r.PathValue("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, `{"error":"invalid event ID"}`, http.StatusBadRequest)
+		return
+	}
+
+	err = deleteEvent(r.Context(), app.db, id)
+	if err == sql.ErrNoRows {
+		http.Error(w, `{"error":"event not found"}`, http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		log.Printf("Error deleting event %d: %v", id, err)
+		http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleListNotifications returns all notifications, optionally filtered by status.

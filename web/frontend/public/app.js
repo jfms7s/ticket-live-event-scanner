@@ -1,6 +1,7 @@
 // Global state
 let allEvents = [];
 let refreshInterval;
+let sortState = { key: null, direction: 'asc' };
 
 // Utility: Create a badge element (helper for DOM creation)
 function createBadge(status, type) {
@@ -47,6 +48,7 @@ async function fetchEvents() {
       throw new Error(`API error: ${response.status}`);
     }
     allEvents = await response.json() || [];
+    populateVenueFilter();
     hideError();
     renderEvents();
   } catch (error) {
@@ -55,11 +57,93 @@ async function fetchEvents() {
   }
 }
 
+// Populate the venue filter dropdown with the unique venues present in allEvents,
+// preserving the current selection if it's still a valid option.
+function populateVenueFilter() {
+  const select = document.getElementById('venueFilter');
+  const previousValue = select.value;
+
+  const venues = Array.from(
+    new Set(allEvents.map((event) => event.venue).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b));
+
+  select.innerHTML = '';
+  const allOption = document.createElement('option');
+  allOption.value = '';
+  allOption.textContent = 'All';
+  select.appendChild(allOption);
+
+  venues.forEach((venue) => {
+    const option = document.createElement('option');
+    option.value = venue;
+    option.textContent = venue;
+    select.appendChild(option);
+  });
+
+  if (venues.includes(previousValue)) {
+    select.value = previousValue;
+  }
+}
+
+// Get a comparable value for a given event and sort key
+function getSortValue(event, key) {
+  switch (key) {
+    case 'title':
+      return (event.title || '').toLowerCase();
+    case 'venue':
+      return (event.venue || '').toLowerCase();
+    case 'category':
+      return (event.category || '').toLowerCase();
+    case 'event_date':
+      return event.event_date || '';
+    case 'status':
+      return (event.status || '').toLowerCase();
+    case 'notification':
+      return getLatestNotificationStatus(event.notifications).status;
+    case 'purchased':
+      return event.purchased ? 1 : 0;
+    default:
+      return '';
+  }
+}
+
+// Update the sort indicator arrows in the table headers
+function updateSortIndicators() {
+  document.querySelectorAll('.events-table th.sortable').forEach((th) => {
+    const indicator = th.querySelector('.sort-indicator');
+    if (th.dataset.sortKey === sortState.key) {
+      indicator.textContent = sortState.direction === 'asc' ? '▲' : '▼';
+    } else {
+      indicator.textContent = '';
+    }
+  });
+}
+
+// Handle clicking a sortable column header
+function handleSortClick(key) {
+  if (sortState.key === key) {
+    sortState.direction = sortState.direction === 'asc' ? 'desc' : 'asc';
+  } else {
+    sortState.key = key;
+    sortState.direction = 'asc';
+  }
+  renderEvents();
+}
+
+// Set up click listeners on sortable table headers
+function setupSortListeners() {
+  document.querySelectorAll('.events-table th.sortable').forEach((th) => {
+    th.addEventListener('click', () => handleSortClick(th.dataset.sortKey));
+  });
+}
+
 // Render events table
 function renderEvents() {
   const tbody = document.getElementById('eventsTableBody');
   const eventStatusFilter = document.getElementById('eventStatusFilter').value;
   const notificationStatusFilter = document.getElementById('notificationStatusFilter').value;
+  const venueFilter = document.getElementById('venueFilter').value;
+  const boughtFilter = document.getElementById('boughtFilter').value;
 
   // Filter events
   const filteredEvents = allEvents.filter((event) => {
@@ -75,8 +159,30 @@ function renderEvents() {
         return false;
       }
     }
+    if (venueFilter && event.venue !== venueFilter) {
+      return false;
+    }
+    if (boughtFilter === 'yes' && !event.purchased) {
+      return false;
+    }
+    if (boughtFilter === 'no' && event.purchased) {
+      return false;
+    }
     return true;
   });
+
+  // Sort events
+  if (sortState.key) {
+    const { key, direction } = sortState;
+    filteredEvents.sort((a, b) => {
+      const valueA = getSortValue(a, key);
+      const valueB = getSortValue(b, key);
+      if (valueA < valueB) return direction === 'asc' ? -1 : 1;
+      if (valueA > valueB) return direction === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }
+  updateSortIndicators();
 
   // Render rows
   tbody.innerHTML = ''; // Clear existing rows
@@ -85,7 +191,7 @@ function renderEvents() {
     const row = document.createElement('tr');
     row.className = 'loading-row';
     const cell = document.createElement('td');
-    cell.colSpan = 7;
+    cell.colSpan = 9;
     cell.textContent = 'No events found';
     row.appendChild(cell);
     tbody.appendChild(row);
@@ -100,10 +206,32 @@ function renderEvents() {
     const row = document.createElement('tr');
     row.dataset.eventId = event.id;
 
-    // Title
+    // Thumbnail
+    const thumbCell = document.createElement('td');
+    thumbCell.className = 'event-thumb';
+    if (event.image_url) {
+      const img = document.createElement('img');
+      img.src = event.image_url;
+      img.alt = '';
+      img.loading = 'lazy';
+      // A dead poster link shouldn't leave a broken-image icon in the table
+      img.onerror = () => thumbCell.replaceChildren();
+      thumbCell.appendChild(img);
+    }
+
+    // Title (links out to the original ticketline.pt event page, if known)
     const titleCell = document.createElement('td');
     titleCell.className = 'event-title';
-    titleCell.textContent = event.title || 'N/A';
+    if (event.url) {
+      const titleLink = document.createElement('a');
+      titleLink.href = event.url;
+      titleLink.target = '_blank';
+      titleLink.rel = 'noopener noreferrer';
+      titleLink.textContent = event.title || 'N/A';
+      titleCell.appendChild(titleLink);
+    } else {
+      titleCell.textContent = event.title || 'N/A';
+    }
 
     // Venue
     const venueCell = document.createElement('td');
@@ -142,7 +270,17 @@ function renderEvents() {
       notifCell.appendChild(badgeContainer);
     }
 
-    // Action cell (retrigger button + status message)
+    // Purchased checkbox
+    const purchasedCell = document.createElement('td');
+    purchasedCell.className = 'event-purchased';
+    const purchasedCheckbox = document.createElement('input');
+    purchasedCheckbox.type = 'checkbox';
+    purchasedCheckbox.checked = !!event.purchased;
+    purchasedCheckbox.dataset.eventId = event.id;
+    purchasedCheckbox.onchange = (e) => handleTogglePurchased(e, event.id);
+    purchasedCell.appendChild(purchasedCheckbox);
+
+    // Action cell (retrigger + delete buttons + status message)
     const actionCell = document.createElement('td');
     const retriggerBtn = document.createElement('button');
     retriggerBtn.className = 'btn-retrigger';
@@ -150,19 +288,28 @@ function renderEvents() {
     retriggerBtn.dataset.eventId = event.id;
     retriggerBtn.onclick = (e) => handleRetrigger(e, event.id);
 
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'btn-delete';
+    deleteBtn.textContent = 'Remove';
+    deleteBtn.dataset.eventId = event.id;
+    deleteBtn.onclick = (e) => handleDelete(e, event.id, event.title);
+
     const statusMsg = document.createElement('div');
     statusMsg.className = 'retrigger-status';
     statusMsg.dataset.eventId = event.id;
 
     actionCell.appendChild(retriggerBtn);
+    actionCell.appendChild(deleteBtn);
     actionCell.appendChild(statusMsg);
 
+    row.appendChild(thumbCell);
     row.appendChild(titleCell);
     row.appendChild(venueCell);
     row.appendChild(categoryCell);
     row.appendChild(dateCell);
     row.appendChild(statusCell);
     row.appendChild(notifCell);
+    row.appendChild(purchasedCell);
     row.appendChild(actionCell);
 
     fragment.appendChild(row);
@@ -213,12 +360,73 @@ async function handleRetrigger(e, eventId) {
   }, 3000);
 }
 
+// Handle toggling the "purchased" checkbox for an event
+async function handleTogglePurchased(e, eventId) {
+  const checkbox = e.target;
+  const purchased = checkbox.checked;
+  checkbox.disabled = true;
+
+  try {
+    const response = await fetch(`${window.API_BASE_URL}/api/events/${eventId}/purchased`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ purchased }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`API error: ${response.status}`);
+    }
+
+    // Keep local state in sync so a later re-render (e.g. filter change)
+    // doesn't revert the checkbox before the next fetch.
+    const evt = allEvents.find((ev) => ev.id === eventId);
+    if (evt) {
+      evt.purchased = purchased;
+    }
+  } catch (error) {
+    checkbox.checked = !purchased; // Revert on failure
+    showError(`Failed to update purchased status: ${error.message}`);
+    console.error('Toggle purchased error:', error);
+  }
+
+  checkbox.disabled = false;
+}
+
+// Handle removing an event from the database
+async function handleDelete(e, eventId, eventTitle) {
+  if (!window.confirm(`Remove "${eventTitle || 'this event'}" from the database? This cannot be undone.`)) {
+    return;
+  }
+
+  const btn = e.target;
+  btn.disabled = true;
+
+  try {
+    const response = await fetch(`${window.API_BASE_URL}/api/events/${eventId}`, {
+      method: 'DELETE',
+    });
+
+    if (!response.ok && response.status !== 404) {
+      throw new Error(`API error: ${response.status}`);
+    }
+
+    allEvents = allEvents.filter((ev) => ev.id !== eventId);
+    renderEvents();
+  } catch (error) {
+    showError(`Failed to remove event: ${error.message}`);
+    console.error('Delete error:', error);
+    btn.disabled = false;
+  }
+}
+
 // Set up event listeners for filters
 function setupFilterListeners() {
   // Event status filter requires re-fetch (server-side filtering)
   document.getElementById('eventStatusFilter').addEventListener('change', fetchEvents);
   // Notification status filter only requires re-render (client-side filtering)
   document.getElementById('notificationStatusFilter').addEventListener('change', renderEvents);
+  document.getElementById('venueFilter').addEventListener('change', renderEvents);
+  document.getElementById('boughtFilter').addEventListener('change', renderEvents);
   document.getElementById('refreshButton').addEventListener('click', fetchEvents);
 }
 
@@ -238,6 +446,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   console.log('App initialized. API Base URL:', window.API_BASE_URL);
   setupFilterListeners();
+  setupSortListeners();
   fetchEvents();
   startAutoRefresh();
 });

@@ -38,6 +38,22 @@
         </select>
       </div>
 
+      <div class="filter-group">
+        <label for="venueFilter">Venue:</label>
+        <select id="venueFilter">
+          <option value="">All</option>
+        </select>
+      </div>
+
+      <div class="filter-group">
+        <label for="boughtFilter">Bought:</label>
+        <select id="boughtFilter">
+          <option value="">All</option>
+          <option value="yes">Yes</option>
+          <option value="no">No</option>
+        </select>
+      </div>
+
       <button id="refreshButton" class="btn-primary">Refresh Now</button>
     </div>
 
@@ -45,18 +61,20 @@
       <table class="events-table">
         <thead>
           <tr>
-            <th>Title</th>
-            <th>Venue</th>
-            <th>Category</th>
-            <th>Date</th>
-            <th>Status</th>
-            <th>Notification</th>
+            <th></th>
+            <th class="sortable" data-sort-key="title">Title<span class="sort-indicator"></span></th>
+            <th class="sortable" data-sort-key="venue">Venue<span class="sort-indicator"></span></th>
+            <th class="sortable" data-sort-key="category">Category<span class="sort-indicator"></span></th>
+            <th class="sortable" data-sort-key="event_date">Date<span class="sort-indicator"></span></th>
+            <th class="sortable" data-sort-key="status">Status<span class="sort-indicator"></span></th>
+            <th class="sortable" data-sort-key="notification">Notification<span class="sort-indicator"></span></th>
+            <th class="sortable" data-sort-key="purchased">Bought<span class="sort-indicator"></span></th>
             <th>Action</th>
           </tr>
         </thead>
         <tbody id="eventsTableBody">
           <tr class="loading-row">
-            <td colspan="7">Loading events...</td>
+            <td colspan="9">Loading events...</td>
           </tr>
         </tbody>
       </table>
