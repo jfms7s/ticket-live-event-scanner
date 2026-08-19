@@ -2,5 +2,5 @@
 *.test
 node_modules/
 dist/
+*.tsbuildinfo
 .env
-web/frontend/public/config.js
