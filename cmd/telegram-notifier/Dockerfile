@@ -1,5 +1,5 @@
 # Multi-stage build for telegram-notifier
-FROM golang:1.25-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
 
 WORKDIR /build
 
@@ -12,8 +12,13 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the application
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -installsuffix cgo \
+# TARGETOS/TARGETARCH are populated automatically by buildx per platform in
+# the build matrix (see .github/workflows/build-push.yml's `platforms:`) --
+# building on $BUILDPLATFORM and cross-compiling to $TARGETARCH is what
+# makes multi-platform builds fast (no QEMU-emulated compile step).
+ARG TARGETOS
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -a -installsuffix cgo \
     -o telegram-notifier ./cmd/telegram-notifier
 
 # Final stage: Alpine runtime with shell for liveness probe

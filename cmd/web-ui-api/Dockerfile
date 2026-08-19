@@ -1,7 +1,7 @@
 # Multi-stage build for web-ui-api
 
 # Stage 1: Build
-FROM golang:1.25.0-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.25.0-alpine AS builder
 
 WORKDIR /build
 
@@ -14,8 +14,13 @@ RUN go mod download
 # Copy the entire project
 COPY . .
 
-# Build the web-ui-api binary
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o web-ui-api ./cmd/web-ui-api
+# TARGETOS/TARGETARCH are populated automatically by buildx per platform in
+# the build matrix (see .github/workflows/build-push.yml's `platforms:`) --
+# building on $BUILDPLATFORM and cross-compiling to $TARGETARCH is what
+# makes multi-platform builds fast (no QEMU-emulated compile step).
+ARG TARGETOS
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o web-ui-api ./cmd/web-ui-api
 
 # Stage 2: Runtime
 FROM alpine:latest
