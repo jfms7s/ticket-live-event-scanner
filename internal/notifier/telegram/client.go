@@ -1,4 +1,5 @@
-package main
+// Package telegram sends event notifications through the Telegram Bot API.
+package telegram
 
 import (
 	"context"
@@ -13,38 +14,6 @@ import (
 
 	"github.com/jfms7s/ticket-live-event-scanner/internal/event"
 )
-
-// MessageAction represents the decision to make on a failed message
-type MessageAction int
-
-const (
-	// ActionAck means the message was successfully processed
-	ActionAck MessageAction = iota
-	// ActionNak means retry the message after a delay
-	ActionNak
-	// ActionTerm means stop retrying this message permanently
-	ActionTerm
-)
-
-// DecideAction determines whether to nak with delay or terminate a message
-// based on the number of deliveries and the maximum allowed.
-func DecideAction(numDelivered, maxDeliver int) MessageAction {
-	if numDelivered >= maxDeliver {
-		return ActionTerm
-	}
-	return ActionNak
-}
-
-// BackoffDelay calculates linear backoff delay: numDelivered * 5 seconds
-func BackoffDelay(numDelivered int) time.Duration {
-	// Cap at 5 minutes to avoid excessively long delays
-	maxDelay := 5 * time.Minute
-	delay := time.Duration(numDelivered) * 5 * time.Second
-	if delay > maxDelay {
-		delay = maxDelay
-	}
-	return delay
-}
 
 // maxPhotoCaptionLen is Telegram's limit on sendPhoto captions — shorter
 // than sendMessage's 4096-char text limit, so a message that doesn't fit
@@ -134,55 +103,4 @@ func sendTelegramMessage(ctx context.Context, client *http.Client, apiBaseURL, c
 	}
 
 	return strconv.FormatInt(telegramResp.Result.MessageID, 10), nil
-}
-
-// formatTelegramMessage formats the event into a human-readable Telegram message with HTML escaping
-func formatTelegramMessage(disc event.Discovered) string {
-	var buf strings.Builder
-
-	buf.WriteString("<b>")
-	buf.WriteString(htmlEscape(disc.Title))
-	buf.WriteString("</b>\n")
-
-	if disc.Venue != "" {
-		buf.WriteString("<i>")
-		buf.WriteString(htmlEscape(disc.Venue))
-		buf.WriteString("</i>\n")
-	}
-
-	if disc.Category != "" {
-		buf.WriteString("📂 <code>")
-		buf.WriteString(htmlEscape(disc.Category))
-		buf.WriteString("</code>\n")
-	}
-
-	if disc.EventDate != "" {
-		buf.WriteString("📅 ")
-		buf.WriteString(htmlEscape(strings.Replace(disc.EventDate, "T", " ", 1)))
-		buf.WriteString("\n")
-	}
-
-	if disc.URL != "" {
-		buf.WriteString("<a href=\"")
-		buf.WriteString(htmlEscape(disc.URL))
-		buf.WriteString("\">View Event</a>")
-	}
-
-	return buf.String()
-}
-
-// htmlEscape escapes HTML special characters for Telegram's HTML parse_mode
-func htmlEscape(s string) string {
-	return strings.NewReplacer(
-		"&", "&amp;",
-		"<", "&lt;",
-		">", "&gt;",
-		"\"", "&quot;",
-		"'", "&#39;",
-	).Replace(s)
-}
-
-// now returns the current UTC time (extracted to allow mocking in tests)
-func now() time.Time {
-	return time.Now().UTC()
 }

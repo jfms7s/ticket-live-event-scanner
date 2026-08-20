@@ -1,4 +1,4 @@
-package main
+package api
 
 import (
 	"context"
@@ -12,65 +12,9 @@ import (
 
 	"github.com/jfms7s/ticket-live-event-scanner/internal/event"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/streams"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/webui/repository"
 	"github.com/nats-io/nats.go/jetstream"
 )
-
-// Publisher is an interface for publishing messages to JetStream.
-type Publisher interface {
-	Publish(ctx context.Context, subject string, data []byte, opts ...jetstream.PublishOpt) (*jetstream.PubAck, error)
-}
-
-// App holds dependencies for HTTP handlers.
-type App struct {
-	db *sql.DB
-	js Publisher
-}
-
-// EventResponse represents an event in the JSON API response.
-type EventResponse struct {
-	ID            int64                         `json:"id"`
-	Slug          string                        `json:"slug"`
-	Title         string                        `json:"title"`
-	Venue         *string                       `json:"venue"`
-	Category      *string                       `json:"category"`
-	EventDate     *string                       `json:"event_date"`
-	URL           string                        `json:"url"`
-	ImageURL      *string                       `json:"image_url"`
-	DiscoveredAt  string                        `json:"discovered_at"`
-	Purchased     bool                          `json:"purchased"`
-	Status        string                        `json:"status"`
-	Notifications []NotificationInEventResponse `json:"notifications"`
-}
-
-// NotificationInEventResponse represents a notification nested within an Event (no event_id field).
-type NotificationInEventResponse struct {
-	ID                int64   `json:"id"`
-	Status            string  `json:"status"`
-	TelegramMessageID *string `json:"telegram_message_id"`
-	AttemptedAt       string  `json:"attempted_at"`
-	ConfirmedAt       *string `json:"confirmed_at"`
-	Error             *string `json:"error"`
-	TriggeredBy       string  `json:"triggered_by"`
-}
-
-// NotificationResponse represents a standalone notification in the JSON API response (includes event_id).
-type NotificationResponse struct {
-	ID                int64   `json:"id"`
-	EventID           int64   `json:"event_id"`
-	Status            string  `json:"status"`
-	TelegramMessageID *string `json:"telegram_message_id"`
-	AttemptedAt       string  `json:"attempted_at"`
-	ConfirmedAt       *string `json:"confirmed_at"`
-	Error             *string `json:"error"`
-	TriggeredBy       string  `json:"triggered_by"`
-}
-
-// handleHealthz returns a simple health check response.
-func (app *App) handleHealthz(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "\"ok\"\n")
-}
 
 // handleListEvents returns all events, optionally filtered by status (active/finished).
 func (app *App) handleListEvents(w http.ResponseWriter, r *http.Request) {
@@ -82,7 +26,7 @@ func (app *App) handleListEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	events, err := listEvents(r.Context(), app.db, status)
+	events, err := repository.ListEvents(r.Context(), app.db, status)
 	if err != nil {
 		log.Printf("Error listing events: %v", err)
 		http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
@@ -103,7 +47,7 @@ func (app *App) handleGetEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	eventResp, err := getEvent(r.Context(), app.db, id)
+	eventResp, err := repository.GetEvent(r.Context(), app.db, id)
 	if err == sql.ErrNoRows {
 		http.Error(w, `{"error":"event not found"}`, http.StatusNotFound)
 		return
@@ -129,7 +73,7 @@ func (app *App) handleRetrigger(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get the event from database
-	eventResp, err := getEvent(r.Context(), app.db, id)
+	eventResp, err := repository.GetEvent(r.Context(), app.db, id)
 	if err == sql.ErrNoRows {
 		http.Error(w, `{"error":"event not found"}`, http.StatusNotFound)
 		return
@@ -207,7 +151,7 @@ func (app *App) handleSetPurchased(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = setEventPurchased(r.Context(), app.db, id, body.Purchased)
+	err = repository.SetEventPurchased(r.Context(), app.db, id, body.Purchased)
 	if err == sql.ErrNoRows {
 		http.Error(w, `{"error":"event not found"}`, http.StatusNotFound)
 		return
@@ -235,7 +179,7 @@ func (app *App) handleDeleteEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = deleteEvent(r.Context(), app.db, id)
+	err = repository.DeleteEvent(r.Context(), app.db, id)
 	if err == sql.ErrNoRows {
 		http.Error(w, `{"error":"event not found"}`, http.StatusNotFound)
 		return
@@ -247,42 +191,4 @@ func (app *App) handleDeleteEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// handleListNotifications returns all notifications, optionally filtered by status.
-func (app *App) handleListNotifications(w http.ResponseWriter, r *http.Request) {
-	status := r.URL.Query().Get("status")
-
-	// Validate status parameter
-	if status != "" && status != "pending" && status != "sent" && status != "failed" {
-		http.Error(w, `{"error":"status must be 'pending', 'sent', or 'failed'"}`, http.StatusBadRequest)
-		return
-	}
-
-	notifs, err := listNotifications(r.Context(), app.db, status)
-	if err != nil {
-		log.Printf("Error listing notifications: %v", err)
-		http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(notifs)
-}
-
-// Helper functions
-
-func derefString(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
-}
-
-func refString(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
 }
