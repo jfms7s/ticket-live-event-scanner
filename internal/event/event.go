@@ -43,3 +43,35 @@ type NotificationFailed struct {
 	FailedAt time.Time `json:"failed_at"`
 	Attempts int       `json:"attempts"`
 }
+
+// Purchased is published to subject "events.purchased" by web-ui-api when
+// an event is marked purchased via PATCH /api/events/{id}/purchased.
+type Purchased struct {
+	EventID     int64     `json:"event_id"`
+	Slug        string    `json:"slug"`
+	Title       string    `json:"title"`
+	Venue       string    `json:"venue,omitempty"`
+	Category    string    `json:"category,omitempty"`
+	EventDate   string    `json:"event_date,omitempty"` // YYYY-MM-DD or YYYY-MM-DDTHH:MM
+	URL         string    `json:"url"`
+	ImageURL    string    `json:"image_url,omitempty"`
+	PurchasedAt time.Time `json:"purchased_at"`
+}
+
+// EmailSent is published to subject "notifications.email.sent" by
+// email-notifier after the calendar-invite email is accepted by the SMTP
+// server.
+type EmailSent struct {
+	EventID   int64     `json:"event_id"`
+	MessageID string    `json:"message_id"`
+	SentAt    time.Time `json:"sent_at"`
+}
+
+// EmailFailed is published to subject "notifications.email.failed" by
+// email-notifier once redelivery attempts are exhausted.
+type EmailFailed struct {
+	EventID  int64     `json:"event_id"`
+	Error    string    `json:"error"`
+	FailedAt time.Time `json:"failed_at"`
+	Attempts int       `json:"attempts"`
+}

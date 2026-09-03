@@ -1,6 +1,6 @@
 # Local development stack. Mirrors deploy/k8s but swaps Turso for a local
-# libSQL file DB (via the same libsql-client-go driver, "file:" DSN) so the
-# stack runs with no external cloud dependencies besides Telegram.
+# libsql-server (sqld) container so the stack runs with no external cloud
+# dependencies besides Telegram.
 #
 # Usage:
 #   cp .env.example .env   # fill in TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID
@@ -8,6 +8,15 @@
 #   docker compose run --rm scraper   # scraper is a CronJob in k8s; run on demand here
 
 services:
+  libsql:
+    image: ghcr.io/tursodatabase/libsql-server:latest
+    environment:
+      SQLD_NODE: primary
+    volumes:
+      - libsql-data:/var/lib/sqld
+    ports:
+      - "8081:8080"
+
   nats:
     image: nats:2-alpine
     command: ["-js", "-sd", "/data", "-m", "8222"]
@@ -28,14 +37,14 @@ services:
     depends_on:
       nats:
         condition: service_healthy
+      libsql:
+        condition: service_started
     environment:
       NATS_URL: nats://nats:4222
-      TURSO_DATABASE_URL: file:/data/local.db
+      TURSO_DATABASE_URL: http://libsql:8080
       TURSO_AUTH_TOKEN: local
       LISTEN_ADDR: :8080
       CORS_ORIGIN: "*"
-    volumes:
-      - api-data:/data
     ports:
       - "8080:8080"
 
@@ -63,6 +72,22 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?set TELEGRAM_BOT_TOKEN in .env}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:?set TELEGRAM_CHAT_ID in .env}
 
+  email-notifier:
+    build:
+      context: .
+      dockerfile: cmd/email-notifier/Dockerfile
+    depends_on:
+      nats:
+        condition: service_healthy
+    environment:
+      NATS_URL: nats://nats:4222
+      SMTP_HOST: ${SMTP_HOST:?set SMTP_HOST in .env}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:?set SMTP_USERNAME in .env}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:?set SMTP_PASSWORD in .env}
+      EMAIL_FROM: ${EMAIL_FROM:?set EMAIL_FROM in .env}
+      EMAIL_TO: ${EMAIL_TO:?set EMAIL_TO in .env}
+
   scraper:
     build:
       context: .
@@ -70,6 +95,8 @@ services:
     depends_on:
       nats:
         condition: service_healthy
+      libsql:
+        condition: service_started
     environment:
       # Comma-separated list of hub pages to track — full URLs or bare
       # slugs both work (the domain, if given, is ignored; hub pages are
@@ -79,15 +106,13 @@ services:
         https://www.ticketline.pt/evento/auchan-live-academia-maia-98164,
         https://www.ticketline.pt/evento/auchan-live-academia-aveiro-98167
       NATS_URL: nats://nats:4222
-      TURSO_DATABASE_URL: file:/data/local.db
+      TURSO_DATABASE_URL: http://libsql:8080
       TURSO_AUTH_TOKEN: local
       USER_AGENT: "ticket-live-event-scanner/0.1"
       REQUEST_DELAY_MS: "1500"
-    volumes:
-      - api-data:/data
     profiles:
       - tools
 
 volumes:
   nats-data:
-  api-data:
+  libsql-data:

@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: email-notifier
+  namespace: ticket-scanner
+  labels:
+    app: email-notifier
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: email-notifier
+  template:
+    metadata:
+      labels:
+        app: email-notifier
+    spec:
+      containers:
+      - name: email-notifier
+        image: ticket-scanner/email-notifier:local
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          allowPrivilegeEscalation: false
+        env:
+        - name: NATS_URL
+          value: "nats://nats:4222"
+        - name: SMTP_HOST
+          valueFrom:
+            secretKeyRef:
+              name: smtp-credentials
+              key: host
+        - name: SMTP_PORT
+          valueFrom:
+            secretKeyRef:
+              name: smtp-credentials
+              key: port
+        - name: SMTP_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: smtp-credentials
+              key: username
+        - name: SMTP_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: smtp-credentials
+              key: password
+        - name: EMAIL_FROM
+          valueFrom:
+            secretKeyRef:
+              name: smtp-credentials
+              key: from
+        - name: EMAIL_TO
+          valueFrom:
+            secretKeyRef:
+              name: smtp-credentials
+              key: to
+        livenessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - "kill -0 1"
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi

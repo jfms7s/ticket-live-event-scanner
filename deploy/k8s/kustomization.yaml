@@ -6,6 +6,7 @@ resources:
   - nats.yaml
   - scraper.yaml
   - telegram-notifier.yaml
+  - email-notifier.yaml
   - web-ui-api.yaml
   - web-ui-frontend.yaml
 
@@ -15,6 +16,9 @@ images:
     newTag: latest
   - name: ticket-scanner/telegram-notifier
     newName: ghcr.io/jfms7s/ticket-live-event-scanner-telegram-notifier
+    newTag: latest
+  - name: ticket-scanner/email-notifier
+    newName: ghcr.io/jfms7s/ticket-live-event-scanner-email-notifier
     newTag: latest
   - name: ticket-scanner/web-ui-api
     newName: ghcr.io/jfms7s/ticket-live-event-scanner-web-ui-api
