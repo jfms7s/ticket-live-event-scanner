@@ -108,7 +108,12 @@ export function App() {
           <table className="events-table">
             <tbody>
               <tr className="loading-row">
-                <td colSpan={9}>Loading events...</td>
+                <td colSpan={9}>
+                  <span className="loading-state">
+                    <span className="spinner" />
+                    Loading events...
+                  </span>
+                </td>
               </tr>
             </tbody>
           </table>
