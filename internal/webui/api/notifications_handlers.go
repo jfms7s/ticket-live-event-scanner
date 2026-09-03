@@ -27,5 +27,7 @@ func (app *App) handleListNotifications(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(notifs)
+	if err := json.NewEncoder(w).Encode(notifs); err != nil {
+		log.Printf("Error encoding notifications response: %v", err)
+	}
 }
