@@ -98,10 +98,6 @@ services:
       libsql:
         condition: service_started
     environment:
-      # Comma-separated list of hub pages to track — full URLs or bare
-      # slugs both work (the domain, if given, is ignored; hub pages are
-      # always fetched against ticketline.pt). Defaults to these same two
-      # pages if unset.
       TICKETLINE_HUB_PAGES: >-
         https://www.ticketline.pt/evento/auchan-live-academia-maia-98164,
         https://www.ticketline.pt/evento/auchan-live-academia-aveiro-98167
