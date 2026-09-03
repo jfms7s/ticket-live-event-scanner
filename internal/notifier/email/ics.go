@@ -24,10 +24,13 @@ const (
 	defaultEventDuration = 2 * time.Hour
 )
 
-// BuildICS renders a minimal RFC 5545 VCALENDAR/VEVENT for p. p.EventDate
-// is interpreted as Europe/Lisbon local time when it carries a time
-// component, or as an all-day event when it's date-only.
-func BuildICS(p event.Purchased) (string, error) {
+// BuildICS renders an RFC 5545 VCALENDAR/VEVENT for p with METHOD:REQUEST
+// and an ORGANIZER/ATTENDEE list, so mail clients (Gmail, Outlook, Apple
+// Mail) render it as an actual calendar invitation with RSVP controls
+// rather than a plain file attachment. p.EventDate is interpreted as
+// Europe/Lisbon local time when it carries a time component, or as an
+// all-day event when it's date-only.
+func BuildICS(p event.Purchased, organizer string, attendees []string) (string, error) {
 	if p.EventDate == "" {
 		return "", fmt.Errorf("event %d: event_date is required to build an ics attachment", p.EventID)
 	}
@@ -61,11 +64,15 @@ func BuildICS(p event.Purchased) (string, error) {
 		"BEGIN:VCALENDAR",
 		"VERSION:2.0",
 		"PRODID:-//ticket-live-event-scanner//email-notifier//EN",
+		"CALSCALE:GREGORIAN",
+		"METHOD:REQUEST",
 		"BEGIN:VEVENT",
 		fmt.Sprintf("UID:event-%d@ticket-live-event-scanner", p.EventID),
 		"DTSTAMP:" + time.Now().UTC().Format(icsUTCLayout),
 		dtstart,
 		dtend,
+		"SEQUENCE:0",
+		"STATUS:CONFIRMED",
 		"SUMMARY:" + icsEscape(p.Title),
 	}
 	if p.Venue != "" {
@@ -76,6 +83,12 @@ func BuildICS(p event.Purchased) (string, error) {
 	}
 	if p.URL != "" {
 		lines = append(lines, "URL:"+icsEscape(p.URL))
+	}
+	if organizer != "" {
+		lines = append(lines, "ORGANIZER:mailto:"+organizer)
+	}
+	for _, attendee := range attendees {
+		lines = append(lines, "ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:"+attendee)
 	}
 	lines = append(lines, "END:VEVENT", "END:VCALENDAR")
 

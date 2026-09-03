@@ -1,5 +1,6 @@
-// Package email sends calendar-invite emails (with a .ics attachment)
-// through a plain SMTP relay.
+// Package email sends calendar invitations (METHOD:REQUEST, with
+// Accept/Decline/Maybe controls in Gmail/Outlook/Apple Mail, plus a
+// fallback .ics attachment) through a plain SMTP relay.
 package email
 
 import (
@@ -37,7 +38,7 @@ type SMTPConfig struct {
 // server-assigned message ID, so the caller-visible ID is synthesized here
 // and embedded as the Message-ID header.
 func SendCalendarEmail(ctx context.Context, cfg SMTPConfig, to []string, p event.Purchased) (string, error) {
-	icsContent, err := BuildICS(p)
+	icsContent, err := BuildICS(p, cfg.From, to)
 	if err != nil {
 		return "", err
 	}
@@ -55,11 +56,38 @@ func SendCalendarEmail(ctx context.Context, cfg SMTPConfig, to []string, p event
 	return messageID, nil
 }
 
-// buildMIMEMessage renders a multipart/mixed RFC 5322 message: a plain
-// text body plus a base64-encoded text/calendar attachment.
+// buildMIMEMessage renders a multipart/mixed RFC 5322 message shaped as a
+// real calendar invitation, not just a file attachment: an inner
+// multipart/alternative carries the plain-text body alongside an inline
+// text/calendar;method=REQUEST part (what Gmail/Outlook/Apple Mail look
+// for to render Accept/Decline/Maybe controls), and the outer part also
+// attaches the same .ics content as a named file for clients that only
+// support opening/importing calendar attachments.
 func buildMIMEMessage(from string, to []string, subject, messageID, textBody, icsContent string) []byte {
+	// Build the inner multipart/alternative first so its boundary is known
+	// before writing the outer part's Content-Type header.
+	var innerBody bytes.Buffer
+	inner := multipart.NewWriter(&innerBody)
+
+	textHeader := textproto.MIMEHeader{}
+	textHeader.Set("Content-Type", "text/plain; charset=UTF-8")
+	if textPart, err := inner.CreatePart(textHeader); err == nil {
+		textPart.Write([]byte(textBody))
+	}
+
+	// Inline (no Content-Disposition: attachment) text/calendar part: this
+	// is what makes Gmail/Outlook/Apple Mail render Accept/Decline/Maybe
+	// controls instead of just showing a file to download.
+	calHeader := textproto.MIMEHeader{}
+	calHeader.Set("Content-Type", "text/calendar; method=REQUEST; charset=UTF-8")
+	calHeader.Set("Content-Transfer-Encoding", "base64")
+	if calPart, err := inner.CreatePart(calHeader); err == nil {
+		writeBase64(calPart, icsContent)
+	}
+	inner.Close()
+
 	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
+	outer := multipart.NewWriter(&body)
 
 	var buf bytes.Buffer
 	buf.WriteString(fmt.Sprintf("From: %s\r\n", from))
@@ -68,34 +96,42 @@ func buildMIMEMessage(from string, to []string, subject, messageID, textBody, ic
 	buf.WriteString(fmt.Sprintf("Message-ID: %s\r\n", messageID))
 	buf.WriteString(fmt.Sprintf("Date: %s\r\n", time.Now().UTC().Format(time.RFC1123Z)))
 	buf.WriteString("MIME-Version: 1.0\r\n")
-	buf.WriteString(fmt.Sprintf("Content-Type: multipart/mixed; boundary=%q\r\n", writer.Boundary()))
+	buf.WriteString(fmt.Sprintf("Content-Type: multipart/mixed; boundary=%q\r\n", outer.Boundary()))
 	buf.WriteString("\r\n")
 
-	textHeader := textproto.MIMEHeader{}
-	textHeader.Set("Content-Type", "text/plain; charset=UTF-8")
-	if textPart, err := writer.CreatePart(textHeader); err == nil {
-		textPart.Write([]byte(textBody))
+	altHeader := textproto.MIMEHeader{}
+	altHeader.Set("Content-Type", fmt.Sprintf("multipart/alternative; boundary=%q", inner.Boundary()))
+	if altPart, err := outer.CreatePart(altHeader); err == nil {
+		altPart.Write(innerBody.Bytes())
 	}
 
+	// Same .ics content again, this time as a named attachment for clients
+	// that only support opening/importing calendar files.
 	icsHeader := textproto.MIMEHeader{}
-	icsHeader.Set("Content-Type", "text/calendar; method=REQUEST; charset=UTF-8")
+	icsHeader.Set("Content-Type", "text/calendar; method=REQUEST; charset=UTF-8; name=\"invite.ics\"")
 	icsHeader.Set("Content-Transfer-Encoding", "base64")
-	icsHeader.Set("Content-Disposition", `attachment; filename="event.ics"`)
-	if icsPart, err := writer.CreatePart(icsHeader); err == nil {
-		encoded := base64.StdEncoding.EncodeToString([]byte(icsContent))
-		for i := 0; i < len(encoded); i += 76 {
-			end := i + 76
-			if end > len(encoded) {
-				end = len(encoded)
-			}
-			icsPart.Write([]byte(encoded[i:end] + "\r\n"))
-		}
+	icsHeader.Set("Content-Disposition", `attachment; filename="invite.ics"`)
+	if icsPart, err := outer.CreatePart(icsHeader); err == nil {
+		writeBase64(icsPart, icsContent)
 	}
 
-	writer.Close()
+	outer.Close()
 	buf.Write(body.Bytes())
 
 	return buf.Bytes()
+}
+
+// writeBase64 writes s to w as base64, wrapped at 76 characters per RFC
+// 2045.
+func writeBase64(w interface{ Write([]byte) (int, error) }, s string) {
+	encoded := base64.StdEncoding.EncodeToString([]byte(s))
+	for i := 0; i < len(encoded); i += 76 {
+		end := i + 76
+		if end > len(encoded) {
+			end = len(encoded)
+		}
+		w.Write([]byte(encoded[i:end] + "\r\n"))
+	}
 }
 
 // sendViaSMTP dials cfg's SMTP relay, negotiates STARTTLS/AUTH when

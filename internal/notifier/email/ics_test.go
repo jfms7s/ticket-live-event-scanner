@@ -18,7 +18,7 @@ func TestBuildICS(t *testing.T) {
 			URL:       "https://example.com/event/42",
 		}
 
-		ics, err := BuildICS(p)
+		ics, err := BuildICS(p, "noreply@example.com", []string{"a@example.com", "b@example.com"})
 		if err != nil {
 			t.Fatalf("BuildICS() error = %v", err)
 		}
@@ -39,6 +39,18 @@ func TestBuildICS(t *testing.T) {
 		if !strings.Contains(ics, "LOCATION:Coliseu") {
 			t.Errorf("expected LOCATION, got:\n%s", ics)
 		}
+		if !strings.Contains(ics, "METHOD:REQUEST") {
+			t.Errorf("expected METHOD:REQUEST so clients render it as an invite, got:\n%s", ics)
+		}
+		if !strings.Contains(ics, "ORGANIZER:mailto:noreply@example.com") {
+			t.Errorf("expected ORGANIZER, got:\n%s", ics)
+		}
+		if !strings.Contains(ics, "ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:a@example.com") {
+			t.Errorf("expected ATTENDEE for a@example.com, got:\n%s", ics)
+		}
+		if !strings.Contains(ics, "ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:b@example.com") {
+			t.Errorf("expected ATTENDEE for b@example.com, got:\n%s", ics)
+		}
 	})
 
 	t.Run("date only becomes all-day event", func(t *testing.T) {
@@ -49,7 +61,7 @@ func TestBuildICS(t *testing.T) {
 			URL:       "https://example.com/event/7",
 		}
 
-		ics, err := BuildICS(p)
+		ics, err := BuildICS(p, "noreply@example.com", []string{"a@example.com"})
 		if err != nil {
 			t.Fatalf("BuildICS() error = %v", err)
 		}
@@ -64,14 +76,14 @@ func TestBuildICS(t *testing.T) {
 
 	t.Run("missing event date is an error", func(t *testing.T) {
 		p := event.Purchased{EventID: 1, Title: "No Date"}
-		if _, err := BuildICS(p); err == nil {
+		if _, err := BuildICS(p, "noreply@example.com", []string{"a@example.com"}); err == nil {
 			t.Error("expected error for missing event_date, got nil")
 		}
 	})
 
 	t.Run("invalid event date is an error", func(t *testing.T) {
 		p := event.Purchased{EventID: 1, Title: "Bad Date", EventDate: "not-a-date"}
-		if _, err := BuildICS(p); err == nil {
+		if _, err := BuildICS(p, "noreply@example.com", []string{"a@example.com"}); err == nil {
 			t.Error("expected error for invalid event_date, got nil")
 		}
 	})
@@ -83,13 +95,24 @@ func TestBuildICS(t *testing.T) {
 			EventDate: "2026-01-01",
 		}
 
-		ics, err := BuildICS(p)
+		ics, err := BuildICS(p, "noreply@example.com", []string{"a@example.com"})
 		if err != nil {
 			t.Fatalf("BuildICS() error = %v", err)
 		}
 
 		if !strings.Contains(ics, `SUMMARY:Rock\, Pop\; Jazz\nSpecial`) {
 			t.Errorf("expected escaped SUMMARY, got:\n%s", ics)
+		}
+	})
+
+	t.Run("no attendees still produces a valid invite", func(t *testing.T) {
+		p := event.Purchased{EventID: 1, Title: "Solo", EventDate: "2026-01-01"}
+		ics, err := BuildICS(p, "noreply@example.com", nil)
+		if err != nil {
+			t.Fatalf("BuildICS() error = %v", err)
+		}
+		if strings.Contains(ics, "ATTENDEE") {
+			t.Errorf("expected no ATTENDEE lines when attendees is empty, got:\n%s", ics)
 		}
 	})
 }
