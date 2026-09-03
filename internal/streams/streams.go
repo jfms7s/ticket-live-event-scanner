@@ -14,14 +14,18 @@ import (
 const (
 	EventsStreamName = "EVENTS"
 	EventsSubject    = "events.discovered"
+	PurchasedSubject = "events.purchased"
 
-	NotificationsStreamName   = "NOTIFICATIONS"
-	NotificationsSentSubject  = "notifications.sent"
-	NotificationsFailSubject  = "notifications.failed"
-	NotificationsAllSubjects  = "notifications.*"
-	EventsConsumerDurableName = "telegram-notifier"
-	EventsConsumerMaxDeliver  = 5
-	EventsConsumerAckWait     = 30 * time.Second
+	NotificationsStreamName       = "NOTIFICATIONS"
+	NotificationsSentSubject      = "notifications.sent"
+	NotificationsFailSubject      = "notifications.failed"
+	NotificationsAllSubjects      = "notifications.*"
+	NotificationsEmailSentSubject = "notifications.email.sent"
+	NotificationsEmailFailSubject = "notifications.email.failed"
+	EventsConsumerDurableName     = "telegram-notifier"
+	EmailConsumerDurableName      = "email-notifier"
+	EventsConsumerMaxDeliver      = 5
+	EventsConsumerAckWait         = 30 * time.Second
 
 	streamMaxAge = 90 * 24 * time.Hour
 )
@@ -32,7 +36,7 @@ const (
 func EnsureStreams(ctx context.Context, js jetstream.JetStream) error {
 	if _, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
 		Name:      EventsStreamName,
-		Subjects:  []string{EventsSubject},
+		Subjects:  []string{EventsSubject, PurchasedSubject},
 		Storage:   jetstream.FileStorage,
 		Retention: jetstream.LimitsPolicy,
 		MaxAge:    streamMaxAge,
@@ -41,8 +45,13 @@ func EnsureStreams(ctx context.Context, js jetstream.JetStream) error {
 	}
 
 	if _, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
-		Name:      NotificationsStreamName,
-		Subjects:  []string{NotificationsSentSubject, NotificationsFailSubject},
+		Name: NotificationsStreamName,
+		Subjects: []string{
+			NotificationsSentSubject,
+			NotificationsFailSubject,
+			NotificationsEmailSentSubject,
+			NotificationsEmailFailSubject,
+		},
 		Storage:   jetstream.FileStorage,
 		Retention: jetstream.LimitsPolicy,
 		MaxAge:    streamMaxAge,
@@ -71,6 +80,29 @@ func EnsureEventsConsumer(ctx context.Context, js jetstream.JetStream) (jetstrea
 	})
 	if err != nil {
 		return nil, fmt.Errorf("ensure %s consumer: %w", EventsConsumerDurableName, err)
+	}
+
+	return consumer, nil
+}
+
+// EnsureEmailConsumer creates or updates the durable consumer used by
+// email-notifier to read events.purchased, with the same redelivery
+// policy as EnsureEventsConsumer.
+func EnsureEmailConsumer(ctx context.Context, js jetstream.JetStream) (jetstream.Consumer, error) {
+	stream, err := js.Stream(ctx, EventsStreamName)
+	if err != nil {
+		return nil, fmt.Errorf("get %s stream: %w", EventsStreamName, err)
+	}
+
+	consumer, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
+		Durable:       EmailConsumerDurableName,
+		AckPolicy:     jetstream.AckExplicitPolicy,
+		MaxDeliver:    EventsConsumerMaxDeliver,
+		AckWait:       EventsConsumerAckWait,
+		FilterSubject: PurchasedSubject,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("ensure %s consumer: %w", EmailConsumerDurableName, err)
 	}
 
 	return consumer, nil

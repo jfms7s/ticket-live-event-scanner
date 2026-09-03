@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jfms7s/ticket-live-event-scanner/internal/streams"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/webui/repository"
 )
 
@@ -314,7 +315,8 @@ func TestSetPurchasedSuccess(t *testing.T) {
 		t.Fatalf("Failed to insert test event: %v", err)
 	}
 
-	app := &App{db: db, js: NewMockJetStream()}
+	mockJS := NewMockJetStream()
+	app := &App{db: db, js: mockJS}
 	server := httptest.NewServer(app.NewMux())
 	defer server.Close()
 
@@ -350,6 +352,15 @@ func TestSetPurchasedSuccess(t *testing.T) {
 		t.Fatalf("Expected purchased=true after PATCH, got false")
 	}
 
+	// Marking purchased=true should publish an events.purchased message so
+	// email-notifier can send a calendar invite.
+	if len(mockJS.publishedMessages) != 1 {
+		t.Fatalf("Expected 1 published message after purchased=true, got %d", len(mockJS.publishedMessages))
+	}
+	if mockJS.publishedMessages[0].subject != streams.PurchasedSubject {
+		t.Fatalf("Expected publish to %q, got %q", streams.PurchasedSubject, mockJS.publishedMessages[0].subject)
+	}
+
 	resp2 := setPurchased(false)
 	defer resp2.Body.Close()
 	if resp2.StatusCode != http.StatusOK {
@@ -367,6 +378,11 @@ func TestSetPurchasedSuccess(t *testing.T) {
 	}
 	if ev2.Purchased {
 		t.Fatalf("Expected purchased=false after second PATCH, got true")
+	}
+
+	// Un-purchasing should not publish anything further.
+	if len(mockJS.publishedMessages) != 1 {
+		t.Fatalf("Expected still 1 published message after purchased=false, got %d", len(mockJS.publishedMessages))
 	}
 }
 

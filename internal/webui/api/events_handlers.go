@@ -35,7 +35,9 @@ func (app *App) handleListEvents(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(events)
+	if err := json.NewEncoder(w).Encode(events); err != nil {
+		log.Printf("Error encoding events response: %v", err)
+	}
 }
 
 // handleGetEvent returns a single event by ID.
@@ -60,7 +62,9 @@ func (app *App) handleGetEvent(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(eventResp)
+	if err := json.NewEncoder(w).Encode(eventResp); err != nil {
+		log.Printf("Error encoding event %d response: %v", id, err)
+	}
 }
 
 // handleRetrigger re-publishes an event to trigger a retry notification.
@@ -125,10 +129,12 @@ func (app *App) handleRetrigger(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"event_id": id,
 		"status":   "pending",
-	})
+	}); err != nil {
+		log.Printf("Error encoding retrigger response for event %d: %v", id, err)
+	}
 }
 
 // setPurchasedRequest is the JSON body for handleSetPurchased.
@@ -162,12 +168,61 @@ func (app *App) handleSetPurchased(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if body.Purchased {
+		app.publishPurchased(r.Context(), id)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"event_id":  id,
 		"purchased": body.Purchased,
-	})
+	}); err != nil {
+		log.Printf("Error encoding purchased response for event %d: %v", id, err)
+	}
+}
+
+// publishPurchased publishes an event.Purchased message for id so
+// email-notifier can send a calendar-invite email. Errors are logged but
+// do not fail the purchased-flag request, since the flag itself was
+// already persisted successfully.
+func (app *App) publishPurchased(reqCtx context.Context, id int64) {
+	eventResp, err := repository.GetEvent(reqCtx, app.db, id)
+	if err != nil {
+		log.Printf("Error getting event %d for purchased publish: %v", id, err)
+		return
+	}
+
+	purchased := &event.Purchased{
+		EventID:     eventResp.ID,
+		Slug:        eventResp.Slug,
+		Title:       eventResp.Title,
+		Venue:       derefString(eventResp.Venue),
+		Category:    derefString(eventResp.Category),
+		EventDate:   derefString(eventResp.EventDate),
+		URL:         eventResp.URL,
+		ImageURL:    derefString(eventResp.ImageURL),
+		PurchasedAt: time.Now(),
+	}
+
+	purchasedBytes, err := json.Marshal(purchased)
+	if err != nil {
+		log.Printf("Error marshaling purchased payload for event %d: %v", id, err)
+		return
+	}
+
+	// Detached, short-lived context so the publish isn't tied to the
+	// client's connection lifecycle, matching handleRetrigger's approach.
+	publishCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	msgID := fmt.Sprintf("purchased-%d-%d", id, time.Now().UnixNano())
+	if _, err := app.js.Publish(publishCtx, streams.PurchasedSubject,
+		purchasedBytes,
+		jetstream.WithMsgID(msgID),
+	); err != nil {
+		log.Printf("Error publishing purchased event for event %d: %v", id, err)
+	}
 }
 
 // handleDeleteEvent removes an event and its notifications from the database.

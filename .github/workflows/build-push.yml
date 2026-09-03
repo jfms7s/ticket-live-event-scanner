@@ -21,6 +21,9 @@ jobs:
           - image: telegram-notifier
             context: .
             dockerfile: cmd/telegram-notifier/Dockerfile
+          - image: email-notifier
+            context: .
+            dockerfile: cmd/email-notifier/Dockerfile
           - image: web-ui-api
             context: .
             dockerfile: cmd/web-ui-api/Dockerfile
