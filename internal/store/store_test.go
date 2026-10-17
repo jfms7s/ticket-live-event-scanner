@@ -155,3 +155,45 @@ func TestMigrateFreshDatabase(t *testing.T) {
 		}
 	}
 }
+
+// TestMigrateAddsHiddenColumn checks that a database migrated before soft
+// hide existed gains events.hidden, defaulting existing rows to visible.
+func TestMigrateAddsHiddenColumn(t *testing.T) {
+	ctx := context.Background()
+	db := openSQLite(t)
+
+	if _, err := db.ExecContext(ctx, `CREATE TABLE events (
+		id INTEGER PRIMARY KEY, slug TEXT NOT NULL, title TEXT NOT NULL, url TEXT NOT NULL,
+		discovered_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		purchased BOOLEAN NOT NULL DEFAULT 0,
+		invite_status TEXT CHECK (invite_status IN ('pending','sent','failed')),
+		invite_error TEXT
+	)`); err != nil {
+		t.Fatalf("create events: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO events (id, slug, title, url) VALUES (1, 's', 't', 'u')`); err != nil {
+		t.Fatalf("insert row: %v", err)
+	}
+
+	for i := 0; i < 2; i++ {
+		if err := Migrate(ctx, db); err != nil {
+			t.Fatalf("Migrate run %d: %v", i+1, err)
+		}
+	}
+
+	var hidden bool
+	if err := db.QueryRowContext(ctx, `SELECT hidden FROM events WHERE id = 1`).Scan(&hidden); err != nil {
+		t.Fatalf("read hidden: %v", err)
+	}
+	if hidden {
+		t.Error("existing row hidden = true after Migrate, want false")
+	}
+
+	fresh := openSQLite(t)
+	if err := Migrate(ctx, fresh); err != nil {
+		t.Fatalf("Migrate fresh: %v", err)
+	}
+	if !columnNames(t, fresh, "events")["hidden"] {
+		t.Error("fresh schema has no events.hidden column")
+	}
+}

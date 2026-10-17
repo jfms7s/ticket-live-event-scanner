@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"database/sql"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/store"
 	"testing"
 	"time"
 
@@ -38,44 +39,10 @@ func setupTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
-// setupTestSchema creates the necessary tables for testing
+// setupTestSchema applies the production schema (store.Migrate), so tests
+// see the same columns as a migrated database.
 func setupTestSchema(ctx context.Context, db *sql.DB) error {
-	// Create tables separately since Exec doesn't handle multiple statements well
-	tables := []string{
-		`CREATE TABLE IF NOT EXISTS events (
-			id            INTEGER PRIMARY KEY,
-			slug          TEXT NOT NULL,
-			title         TEXT NOT NULL,
-			venue         TEXT,
-			category      TEXT,
-			event_date    DATE,
-			url           TEXT NOT NULL,
-			image_url     TEXT,
-			discovered_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			purchased     BOOLEAN NOT NULL DEFAULT 0,
-			invite_status TEXT CHECK (invite_status IN ('pending','sent','failed')),
-			invite_error  TEXT
-		)`,
-		`CREATE TABLE IF NOT EXISTS notifications (
-			id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-			event_id            INTEGER NOT NULL REFERENCES events(id),
-			status              TEXT NOT NULL CHECK (status IN ('pending','sent','failed')),
-			telegram_message_id TEXT,
-			attempted_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			confirmed_at        TIMESTAMP,
-			error               TEXT,
-			triggered_by        TEXT NOT NULL DEFAULT 'scraper'
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_notifications_event_id ON notifications(event_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_events_discovered_at ON events(discovered_at)`,
-	}
-
-	for _, table := range tables {
-		if _, err := db.ExecContext(ctx, table); err != nil {
-			return err
-		}
-	}
-	return nil
+	return store.Migrate(ctx, db)
 }
 
 // MockJetStream is a minimal mock that records published messages.

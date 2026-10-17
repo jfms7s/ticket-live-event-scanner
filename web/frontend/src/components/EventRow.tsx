@@ -4,6 +4,7 @@ import type { Event } from '../types';
 import { formatDate } from '../utils/format';
 import { getInviteBadge } from '../utils/invite';
 import { getLatestNotificationStatus } from '../utils/notifications';
+import { removeConfirmText } from '../utils/remove';
 import { StatusBadge } from './StatusBadge';
 
 const STATUS_MESSAGE_MS = 3000;
@@ -58,7 +59,7 @@ export function EventRow({ event, onPurchasedChange, onDeleted, onError }: Event
   }
 
   async function handleDelete() {
-    if (!window.confirm(`Remove "${event.title || 'this event'}" from the database? This cannot be undone.`)) {
+    if (!window.confirm(removeConfirmText(event.title))) {
       return;
     }
 

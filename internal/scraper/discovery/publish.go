@@ -18,8 +18,8 @@ import (
 // publishes the resulting event.Discovered message to NATS JetStream.
 func (s *Scraper) fetchAndPublishEvent(ctx context.Context, basicEvent event.Discovered) error {
 	// Construct full absolute URL for detail page
-	detailURL := fmt.Sprintf("%s/evento/%s", baseURL, basicEvent.Slug)
-	body, err := s.fetcher.Fetch(ctx, detailURL, baseURL)
+	detailURL := fmt.Sprintf("%s/evento/%s", s.baseURL, basicEvent.Slug)
+	body, err := s.fetcher.Fetch(ctx, detailURL, s.baseURL)
 	if err != nil {
 		return err
 	}
@@ -40,7 +40,7 @@ func (s *Scraper) fetchAndPublishEvent(ctx context.Context, basicEvent event.Dis
 		detailEvent.URL = detailURL
 	} else if !strings.HasPrefix(detailEvent.URL, "http") {
 		// If URL is relative, make it absolute
-		detailEvent.URL = baseURL + detailEvent.URL
+		detailEvent.URL = s.baseURL + detailEvent.URL
 	}
 
 	// Detail pages don't self-link via itemprop="url", so parseEventDetail
@@ -77,7 +77,7 @@ func (s *Scraper) fetchAndPublishEvent(ctx context.Context, basicEvent event.Dis
 		return fmt.Errorf("marshal event: %w", err)
 	}
 
-	_, err = s.js.Publish(ctx, streams.EventsSubject, data,
+	ack, err := s.pub.Publish(ctx, streams.EventsSubject, data,
 		jetstream.WithMsgID(strconv.FormatInt(basicEvent.EventID, 10)))
 	if err != nil {
 		return fmt.Errorf("publish event: %w", err)
@@ -88,7 +88,21 @@ func (s *Scraper) fetchAndPublishEvent(ctx context.Context, basicEvent event.Dis
 	// (e.g. the same hub session appearing across multiple month searches).
 	s.knownIDs[basicEvent.EventID] = true
 
-	s.Stats.EventsPublished++
-	log.Printf("Published event %d: %s", basicEvent.EventID, detailEvent.Title)
+	if ack != nil && ack.Duplicate {
+		// The stream still remembers this message ID (7-day window), so
+		// nothing was delivered: an earlier run published it but didn't
+		// get to mark it seen.
+		log.Printf("Event %d already on the stream; marking it seen", basicEvent.EventID)
+	} else {
+		s.Stats.EventsPublished++
+		log.Printf("Published event %d: %s", basicEvent.EventID, detailEvent.Title)
+	}
+
+	// Without the mark, the next runs rely on the stream's message-ID
+	// window and on web-ui-api materialising the event, so fail the run
+	// loudly rather than carry on as if all were well.
+	if err := s.seen.Mark(ctx, basicEvent.EventID); err != nil {
+		return fmt.Errorf("event %d published but not marked seen: %w", basicEvent.EventID, err)
+	}
 	return nil
 }

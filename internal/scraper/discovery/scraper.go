@@ -1,9 +1,11 @@
 // Package discovery orchestrates the scraper's end-to-end run: loading
-// known event IDs, fetching tracked hub pages, parsing new sessions off
-// them, and publishing newly discovered events to NATS JetStream.
+// the set of already-seen event IDs, fetching tracked hub pages, parsing
+// new sessions off them, and publishing newly discovered events to NATS
+// JetStream.
 package discovery
 
 import (
+	"context"
 	"database/sql"
 	"time"
 
@@ -25,25 +27,49 @@ type Stats struct {
 	Errors          int
 }
 
+// publisher is the part of jetstream.JetStream the scraper uses.
+type publisher interface {
+	Publish(ctx context.Context, subject string, payload []byte, opts ...jetstream.PublishOpt) (*jetstream.PubAck, error)
+}
+
+// seenStore holds the IDs of events the scraper has already published, so
+// a later run doesn't publish them again.
+type seenStore interface {
+	// Load returns every seen event ID.
+	Load(ctx context.Context) (map[int64]bool, error)
+	// Mark records id as seen. It is called right after a successful
+	// publish.
+	Mark(ctx context.Context, id int64) error
+}
+
 // Scraper discovers new events from the configured hub pages and publishes
 // them to NATS JetStream.
 type Scraper struct {
 	cfg      config.Config
+	baseURL  string
 	fetcher  *fetch.Fetcher
-	db       *sql.DB
-	js       jetstream.JetStream
+	seen     seenStore
+	pub      publisher
 	knownIDs map[int64]bool
 	Stats    Stats
 }
 
-// New constructs a Scraper against the given config, database, and
-// JetStream context.
-func New(cfg config.Config, db *sql.DB, js jetstream.JetStream) *Scraper {
+// New constructs a Scraper that publishes through js and keeps its seen
+// set in the seen KV bucket (see streams.EnsureSeenBucket), also reading
+// the IDs already in web-ui-api's events table from db.
+func New(cfg config.Config, db *sql.DB, js jetstream.JetStream, seen jetstream.KeyValue) *Scraper {
+	return newScraper(cfg, baseURL, newSeenStore(seen, db), js)
+}
+
+// newScraper builds a Scraper that fetches from site (baseURL in
+// production, an httptest server in tests).
+func newScraper(cfg config.Config, site string, seen seenStore, pub publisher) *Scraper {
 	return &Scraper{
 		cfg:      cfg,
+		baseURL:  site,
 		fetcher:  fetch.New(cfg.UserAgent, httpTimeout),
-		db:       db,
-		js:       js,
+		seen:     seen,
+		pub:      pub,
 		knownIDs: make(map[int64]bool),
 	}
 }

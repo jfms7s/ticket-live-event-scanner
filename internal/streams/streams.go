@@ -27,6 +27,14 @@ const (
 	EventsConsumerAckWait         = 30 * time.Second
 
 	streamMaxAge = 90 * 24 * time.Hour
+
+	// eventsDedupWindow is how long JetStream remembers a message ID on
+	// EVENTS. The scraper runs hourly and publishes each session with
+	// WithMsgID(eventID), so the server's 2-minute default never catches a
+	// repeat from the next run. Seven days covers a week of web-ui-api
+	// being down or behind; the scraper's seen bucket covers the rest.
+	// Manual retries and purchases use unique IDs, so they are unaffected.
+	eventsDedupWindow = 7 * 24 * time.Hour
 )
 
 // NotificationsSubjects returns every subject on the NOTIFICATIONS stream:
@@ -41,27 +49,41 @@ func NotificationsSubjects() []string {
 	}
 }
 
-// EnsureStreams creates or updates the EVENTS and NOTIFICATIONS streams.
-// Safe to call from every service on startup; JetStream treats it as a
-// no-op when the config already matches.
-func EnsureStreams(ctx context.Context, js jetstream.JetStream) error {
-	if _, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
-		Name:      EventsStreamName,
-		Subjects:  []string{EventsSubject, PurchasedSubject},
-		Storage:   jetstream.FileStorage,
-		Retention: jetstream.LimitsPolicy,
-		MaxAge:    streamMaxAge,
-	}); err != nil {
-		return fmt.Errorf("ensure %s stream: %w", EventsStreamName, err)
+// EventsStreamConfig is the EVENTS stream's config. Every service applies
+// it on startup through EnsureStreams, so an image built before a change
+// here resets the stream to its own copy when it starts: release all
+// images together after changing it.
+func EventsStreamConfig() jetstream.StreamConfig {
+	return jetstream.StreamConfig{
+		Name:       EventsStreamName,
+		Subjects:   []string{EventsSubject, PurchasedSubject},
+		Storage:    jetstream.FileStorage,
+		Retention:  jetstream.LimitsPolicy,
+		MaxAge:     streamMaxAge,
+		Duplicates: eventsDedupWindow,
 	}
+}
 
-	if _, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
+// NotificationsStreamConfig is the NOTIFICATIONS stream's config.
+func NotificationsStreamConfig() jetstream.StreamConfig {
+	return jetstream.StreamConfig{
 		Name:      NotificationsStreamName,
 		Subjects:  NotificationsSubjects(),
 		Storage:   jetstream.FileStorage,
 		Retention: jetstream.LimitsPolicy,
 		MaxAge:    streamMaxAge,
-	}); err != nil {
+	}
+}
+
+// EnsureStreams creates or updates the EVENTS and NOTIFICATIONS streams.
+// Safe to call from every service on startup; JetStream treats it as a
+// no-op when the config already matches.
+func EnsureStreams(ctx context.Context, js jetstream.JetStream) error {
+	if _, err := js.CreateOrUpdateStream(ctx, EventsStreamConfig()); err != nil {
+		return fmt.Errorf("ensure %s stream: %w", EventsStreamName, err)
+	}
+
+	if _, err := js.CreateOrUpdateStream(ctx, NotificationsStreamConfig()); err != nil {
 		return fmt.Errorf("ensure %s stream: %w", NotificationsStreamName, err)
 	}
 
@@ -112,4 +134,29 @@ func EnsureEmailConsumer(ctx context.Context, js jetstream.JetStream) (jetstream
 	}
 
 	return consumer, nil
+}
+
+// SeenBucketName is the JetStream KV bucket where the scraper records each
+// event ID it has published, so later runs don't publish it again. Only
+// the scraper reads or writes it.
+const SeenBucketName = "SCRAPER_SEEN_EVENTS"
+
+// SeenBucketConfig is the seen bucket's config. Keys never expire (no TTL):
+// an expired key would let a still-listed event be notified again.
+func SeenBucketConfig() jetstream.KeyValueConfig {
+	return jetstream.KeyValueConfig{
+		Bucket:      SeenBucketName,
+		Description: "Event IDs the scraper has published (key: event ID, value: when)",
+		History:     1,
+		Storage:     jetstream.FileStorage,
+	}
+}
+
+// EnsureSeenBucket creates or updates the seen bucket and returns it.
+func EnsureSeenBucket(ctx context.Context, js jetstream.JetStream) (jetstream.KeyValue, error) {
+	kv, err := js.CreateOrUpdateKeyValue(ctx, SeenBucketConfig())
+	if err != nil {
+		return nil, fmt.Errorf("ensure %s bucket: %w", SeenBucketName, err)
+	}
+	return kv, nil
 }

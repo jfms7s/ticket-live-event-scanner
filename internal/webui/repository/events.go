@@ -7,14 +7,15 @@ import (
 	"time"
 )
 
-// ListEvents returns all events with their notifications, optionally filtered by status.
-// status can be "" (all), "active", or "finished".
-// ListEvents returns events with their status computed as of now.
+// ListEvents returns every visible (not hidden) event with its
+// notifications and its status computed as of now, optionally filtered by
+// status: "" (all), "active", or "finished".
 func ListEvents(ctx context.Context, db *sql.DB, status string, now time.Time) ([]EventResponse, error) {
 	query := `
 		SELECT id, slug, title, venue, category, event_date, url, image_url, discovered_at, purchased,
 		       invite_status, invite_error
 		FROM events
+		WHERE hidden = 0
 		ORDER BY discovered_at DESC
 	`
 
@@ -95,14 +96,14 @@ func ListEvents(ctx context.Context, db *sql.DB, status string, now time.Time) (
 	return events, nil
 }
 
-// GetEvent returns a single event by ID with its notifications.
-// GetEvent returns one event with its status computed as of now.
+// GetEvent returns one visible event with its notifications and its status
+// computed as of now. A hidden event is reported as sql.ErrNoRows.
 func GetEvent(ctx context.Context, db *sql.DB, id int64, now time.Time) (*EventResponse, error) {
 	query := `
 		SELECT id, slug, title, venue, category, event_date, url, image_url, discovered_at, purchased,
 		       invite_status, invite_error
 		FROM events
-		WHERE id = ?
+		WHERE id = ? AND hidden = 0
 	`
 
 	var slug, title, url string
@@ -143,14 +144,14 @@ func GetEvent(ctx context.Context, db *sql.DB, id int64, now time.Time) (*EventR
 }
 
 // SetEventPurchased updates the purchased flag for a single event. It
-// returns sql.ErrNoRows if no event with that ID exists. Marking an event
+// returns sql.ErrNoRows if no visible event with that ID exists. Marking an event
 // purchased also sets its invite to pending (clearing any earlier error) in
 // the same UPDATE, since the caller then publishes a new invite request.
 // Unmarking leaves the invite state alone: an invite already sent stays sent.
 func SetEventPurchased(ctx context.Context, db *sql.DB, id int64, purchased bool) error {
-	query := `UPDATE events SET purchased = ? WHERE id = ?`
+	query := `UPDATE events SET purchased = ? WHERE id = ? AND hidden = 0`
 	if purchased {
-		query = `UPDATE events SET purchased = ?, invite_status = 'pending', invite_error = NULL WHERE id = ?`
+		query = `UPDATE events SET purchased = ?, invite_status = 'pending', invite_error = NULL WHERE id = ? AND hidden = 0`
 	}
 	result, err := db.ExecContext(ctx, query, purchased, id)
 	if err != nil {
@@ -168,25 +169,15 @@ func SetEventPurchased(ctx context.Context, db *sql.DB, id int64, purchased bool
 	return nil
 }
 
-// DeleteEvent removes an event and its notifications from the database.
-// It returns sql.ErrNoRows if no event with that ID exists. Notifications
-// are deleted explicitly in the same transaction since SQLite foreign keys
-// are not enforced here (no PRAGMA foreign_keys=ON), so there is no
-// cascading delete to rely on.
-func DeleteEvent(ctx context.Context, db *sql.DB, id int64) error {
-	tx, err := db.BeginTx(ctx, nil)
+// HideEvent is the dashboard's Remove: it hides an event from the API and
+// keeps its row and notifications. The row is how the scraper knows the
+// event was already notified, so deleting it would notify the event again
+// on the next run while it is still listed. It returns sql.ErrNoRows if no
+// visible event with that ID exists.
+func HideEvent(ctx context.Context, db *sql.DB, id int64) error {
+	result, err := db.ExecContext(ctx, `UPDATE events SET hidden = 1 WHERE id = ? AND hidden = 0`, id)
 	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	if _, err := tx.ExecContext(ctx, `DELETE FROM notifications WHERE event_id = ?`, id); err != nil {
-		return fmt.Errorf("delete notifications: %w", err)
-	}
-
-	result, err := tx.ExecContext(ctx, `DELETE FROM events WHERE id = ?`, id)
-	if err != nil {
-		return fmt.Errorf("delete event: %w", err)
+		return fmt.Errorf("hide event: %w", err)
 	}
 
 	rows, err := result.RowsAffected()
@@ -195,10 +186,6 @@ func DeleteEvent(ctx context.Context, db *sql.DB, id int64) error {
 	}
 	if rows == 0 {
 		return sql.ErrNoRows
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit transaction: %w", err)
 	}
 
 	return nil
