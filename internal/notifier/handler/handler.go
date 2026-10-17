@@ -8,14 +8,22 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jfms7s/ticket-live-event-scanner/internal/event"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/notifier/telegram"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
+// publisher is the part of jetstream.JetStream the handler uses, so tests
+// can substitute a fake.
+type publisher interface {
+	Publish(ctx context.Context, subject string, data []byte, opts ...jetstream.PublishOpt) (*jetstream.PubAck, error)
+}
+
 // Handler processes discovered events
 type Handler struct {
-	telegramBotToken string
-	telegramChatID   string
-	js               jetstream.JetStream
+	js publisher
+	// send delivers one notification to Telegram and returns its message_id.
+	send func(ctx context.Context, d event.Discovered) (string, error)
 	// recentlySent tracks recently sent Telegram messages by event_id to prevent
 	// duplicates if NATS publish fails and the message is redelivered.
 	// Key: event_id, Value: (message_id, sent_time)
@@ -32,10 +40,11 @@ type recentSend struct {
 // New creates a new message handler
 func New(botToken, chatID string, js jetstream.JetStream) *Handler {
 	return &Handler{
-		telegramBotToken: botToken,
-		telegramChatID:   chatID,
-		js:               js,
-		recentlySent:     make(map[int64]*recentSend),
+		js: js,
+		send: func(ctx context.Context, d event.Discovered) (string, error) {
+			return telegram.SendTelegramMessage(ctx, botToken, chatID, d)
+		},
+		recentlySent: make(map[int64]*recentSend),
 	}
 }
 
