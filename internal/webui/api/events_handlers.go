@@ -185,11 +185,14 @@ func (app *App) handleSetPurchased(w http.ResponseWriter, r *http.Request) {
 // publishPurchased publishes an event.Purchased message for id so
 // email-notifier can send a calendar-invite email. Errors are logged but
 // do not fail the purchased-flag request, since the flag itself was
-// already persisted successfully.
+// already persisted successfully. When the message can't be published, the
+// invite SetEventPurchased left pending is marked failed instead, because
+// no result for it will ever arrive.
 func (app *App) publishPurchased(reqCtx context.Context, id int64) {
 	eventResp, err := repository.GetEvent(reqCtx, app.db, id, time.Now())
 	if err != nil {
 		log.Printf("Error getting event %d for purchased publish: %v", id, err)
+		app.markInviteNotQueued(id, err)
 		return
 	}
 
@@ -208,6 +211,7 @@ func (app *App) publishPurchased(reqCtx context.Context, id int64) {
 	purchasedBytes, err := json.Marshal(purchased)
 	if err != nil {
 		log.Printf("Error marshaling purchased payload for event %d: %v", id, err)
+		app.markInviteNotQueued(id, err)
 		return
 	}
 
@@ -222,6 +226,18 @@ func (app *App) publishPurchased(reqCtx context.Context, id int64) {
 		jetstream.WithMsgID(msgID),
 	); err != nil {
 		log.Printf("Error publishing purchased event for event %d: %v", id, err)
+		app.markInviteNotQueued(id, err)
+	}
+}
+
+// markInviteNotQueued records that the invite request for id never reached
+// NATS. It uses its own short context, like the publish, so a client that
+// disconnects doesn't leave the invite pending.
+func (app *App) markInviteNotQueued(id int64, cause error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := repository.UpdateInviteFailed(ctx, app.db, id, "invite not queued: "+cause.Error()); err != nil {
+		log.Printf("Error marking invite failed for event %d: %v", id, err)
 	}
 }
 

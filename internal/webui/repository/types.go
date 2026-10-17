@@ -17,6 +17,13 @@ type EventResponse struct {
 	Purchased     bool                          `json:"purchased"`
 	Status        string                        `json:"status"`
 	Notifications []NotificationInEventResponse `json:"notifications"`
+	// InviteStatus is the calendar-invite email's state: "pending" once the
+	// purchase is recorded, then "sent" or "failed" from email-notifier's
+	// result. Nil for an event never marked purchased, or purchased before
+	// invites were tracked.
+	InviteStatus *string `json:"invite_status"`
+	// InviteError is the failure reason when InviteStatus is "failed".
+	InviteError *string `json:"invite_error"`
 }
 
 // NotificationInEventResponse represents a notification nested within an Event (no event_id field).

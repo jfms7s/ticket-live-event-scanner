@@ -90,7 +90,7 @@ func main() {
 		log.Fatalf("Failed to create events consumer: %v", err)
 	}
 
-	// Consumer for notifications.* (sent and failed)
+	// Consumer for Telegram and email delivery results
 	notifConsumer, err := consumer.CreateOrUpdateNotificationsConsumer(ctx, js)
 	if err != nil {
 		log.Fatalf("Failed to create notifications consumer: %v", err)

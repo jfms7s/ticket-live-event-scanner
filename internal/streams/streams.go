@@ -19,7 +19,6 @@ const (
 	NotificationsStreamName       = "NOTIFICATIONS"
 	NotificationsSentSubject      = "notifications.sent"
 	NotificationsFailSubject      = "notifications.failed"
-	NotificationsAllSubjects      = "notifications.*"
 	NotificationsEmailSentSubject = "notifications.email.sent"
 	NotificationsEmailFailSubject = "notifications.email.failed"
 	EventsConsumerDurableName     = "telegram-notifier"
@@ -29,6 +28,18 @@ const (
 
 	streamMaxAge = 90 * 24 * time.Hour
 )
+
+// NotificationsSubjects returns every subject on the NOTIFICATIONS stream:
+// Telegram results (two tokens) and email results (three tokens). It is a
+// function so callers get their own slice to keep.
+func NotificationsSubjects() []string {
+	return []string{
+		NotificationsSentSubject,
+		NotificationsFailSubject,
+		NotificationsEmailSentSubject,
+		NotificationsEmailFailSubject,
+	}
+}
 
 // EnsureStreams creates or updates the EVENTS and NOTIFICATIONS streams.
 // Safe to call from every service on startup; JetStream treats it as a
@@ -45,13 +56,8 @@ func EnsureStreams(ctx context.Context, js jetstream.JetStream) error {
 	}
 
 	if _, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
-		Name: NotificationsStreamName,
-		Subjects: []string{
-			NotificationsSentSubject,
-			NotificationsFailSubject,
-			NotificationsEmailSentSubject,
-			NotificationsEmailFailSubject,
-		},
+		Name:      NotificationsStreamName,
+		Subjects:  NotificationsSubjects(),
 		Storage:   jetstream.FileStorage,
 		Retention: jetstream.LimitsPolicy,
 		MaxAge:    streamMaxAge,
