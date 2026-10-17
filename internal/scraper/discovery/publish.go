@@ -18,8 +18,8 @@ import (
 // publishes the resulting event.Discovered message to NATS JetStream.
 func (s *Scraper) fetchAndPublishEvent(ctx context.Context, basicEvent event.Discovered) error {
 	// Construct full absolute URL for detail page
-	detailURL := fmt.Sprintf("%s/evento/%s", baseURL, basicEvent.Slug)
-	body, err := s.fetcher.Fetch(ctx, detailURL, baseURL)
+	detailURL := fmt.Sprintf("%s/evento/%s", s.baseURL, basicEvent.Slug)
+	body, err := s.fetcher.Fetch(ctx, detailURL, s.baseURL)
 	if err != nil {
 		return err
 	}
@@ -40,7 +40,7 @@ func (s *Scraper) fetchAndPublishEvent(ctx context.Context, basicEvent event.Dis
 		detailEvent.URL = detailURL
 	} else if !strings.HasPrefix(detailEvent.URL, "http") {
 		// If URL is relative, make it absolute
-		detailEvent.URL = baseURL + detailEvent.URL
+		detailEvent.URL = s.baseURL + detailEvent.URL
 	}
 
 	// Detail pages don't self-link via itemprop="url", so parseEventDetail
@@ -77,7 +77,7 @@ func (s *Scraper) fetchAndPublishEvent(ctx context.Context, basicEvent event.Dis
 		return fmt.Errorf("marshal event: %w", err)
 	}
 
-	_, err = s.js.Publish(ctx, streams.EventsSubject, data,
+	_, err = s.pub.Publish(ctx, streams.EventsSubject, data,
 		jetstream.WithMsgID(strconv.FormatInt(basicEvent.EventID, 10)))
 	if err != nil {
 		return fmt.Errorf("publish event: %w", err)
