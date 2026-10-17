@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { fetchEvents } from '../api/client';
 import type { Event, EventStatusFilter } from '../types';
+import { startVisibilityAwarePolling } from './visibilityPolling';
 
 const AUTO_REFRESH_MS = 30 * 1000;
 
@@ -23,8 +24,7 @@ export function useEvents(eventStatusFilter: EventStatusFilter) {
 
   useEffect(() => {
     refresh();
-    const interval = setInterval(refresh, AUTO_REFRESH_MS);
-    return () => clearInterval(interval);
+    return startVisibilityAwarePolling(refresh, AUTO_REFRESH_MS);
   }, [refresh]);
 
   return { events, setEvents, error, setError, loading, refresh };

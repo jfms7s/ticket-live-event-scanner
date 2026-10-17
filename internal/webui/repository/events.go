@@ -23,9 +23,9 @@ func ListEvents(ctx context.Context, db *sql.DB, status string, now time.Time) (
 	}
 
 	// Scan every row into a base struct first and close rows before issuing
-	// any further queries. Calling GetNotificationsForEvent (a second
+	// any further queries. Issuing the notifications query (a second
 	// db.QueryContext on the same *sql.DB) while these rows are still open
-	// is an N+1-and-deadlock-prone pattern: under a constrained connection
+	// would deadlock: under a constrained connection
 	// pool (e.g. MaxOpenConns=1, as in tests) the nested query can never
 	// get a connection because the outer Rows is holding the only one,
 	// while the outer loop can't finish until the nested query returns.
@@ -59,11 +59,17 @@ func ListEvents(ctx context.Context, db *sql.DB, status string, now time.Time) (
 	}
 	rows.Close()
 
+	// One query for every event's notifications, not one per event.
+	byEvent, err := listNotificationsByEvent(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+
 	events := make([]EventResponse, 0, len(bases))
 	for _, b := range bases {
-		notifs, err := GetNotificationsForEvent(ctx, db, b.id)
-		if err != nil {
-			return nil, fmt.Errorf("get notifications for event %d: %w", b.id, err)
+		notifs := byEvent[b.id]
+		if notifs == nil {
+			notifs = []NotificationInEventResponse{}
 		}
 
 		events = append(events, EventResponse{
