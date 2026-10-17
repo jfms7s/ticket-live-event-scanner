@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS events (
     discovered_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     purchased     BOOLEAN NOT NULL DEFAULT 0,
     invite_status TEXT CHECK (invite_status IN ('pending','sent','failed')),
-    invite_error  TEXT
+    invite_error  TEXT,
+    hidden        BOOLEAN NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS notifications (
@@ -75,6 +76,9 @@ var addedEventColumns = []string{
 	"purchased BOOLEAN NOT NULL DEFAULT 0",
 	"invite_status TEXT CHECK (invite_status IN ('pending','sent','failed'))",
 	"invite_error TEXT",
+	// hidden is the dashboard's Remove: the row stays as the record that
+	// the event was already notified.
+	"hidden BOOLEAN NOT NULL DEFAULT 0",
 }
 
 // addColumn runs ALTER TABLE ... ADD COLUMN, treating "duplicate column

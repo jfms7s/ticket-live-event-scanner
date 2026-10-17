@@ -241,7 +241,8 @@ func (app *App) markInviteNotQueued(id int64, cause error) {
 	}
 }
 
-// handleDeleteEvent removes an event and its notifications from the database.
+// handleDeleteEvent is the dashboard's Remove: it hides the event (see
+// repository.HideEvent) rather than deleting the row.
 func (app *App) handleDeleteEvent(w http.ResponseWriter, r *http.Request) {
 	idStr := r.PathValue("id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -250,13 +251,13 @@ func (app *App) handleDeleteEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = repository.DeleteEvent(r.Context(), app.db, id)
+	err = repository.HideEvent(r.Context(), app.db, id)
 	if err == sql.ErrNoRows {
 		http.Error(w, `{"error":"event not found"}`, http.StatusNotFound)
 		return
 	}
 	if err != nil {
-		log.Printf("Error deleting event %d: %v", id, err)
+		log.Printf("Error hiding event %d: %v", id, err)
 		http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
 		return
 	}

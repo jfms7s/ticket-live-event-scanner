@@ -410,8 +410,10 @@ func TestDeleteEventNotFound(t *testing.T) {
 	}
 }
 
-// TestDeleteEventSuccess tests deleting an event along with its notifications.
-func TestDeleteEventSuccess(t *testing.T) {
+// TestDeleteEventHidesIt tests that DELETE (the dashboard's Remove) hides
+// the event from the API but keeps its row and notifications, which the
+// scraper relies on to not notify it again.
+func TestDeleteEventHidesIt(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
@@ -465,7 +467,41 @@ func TestDeleteEventSuccess(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM notifications WHERE event_id = ?`, 98164).Scan(&notifCount); err != nil {
 		t.Fatalf("Failed to count notifications: %v", err)
 	}
-	if notifCount != 0 {
-		t.Fatalf("Expected notifications to be deleted, found %d", notifCount)
+	if notifCount != 1 {
+		t.Fatalf("Expected the notification to be kept, found %d", notifCount)
+	}
+
+	var hidden bool
+	if err := db.QueryRowContext(ctx, `SELECT hidden FROM events WHERE id = ?`, 98164).Scan(&hidden); err != nil {
+		t.Fatalf("Expected the event row to be kept: %v", err)
+	}
+	if !hidden {
+		t.Fatal("Expected the kept event row to be hidden")
+	}
+
+	listResp, err := http.Get(server.URL + "/api/events")
+	if err != nil {
+		t.Fatalf("Failed to list events: %v", err)
+	}
+	defer listResp.Body.Close()
+	var listed []map[string]any
+	if err := json.NewDecoder(listResp.Body).Decode(&listed); err != nil {
+		t.Fatalf("Failed to decode event list: %v", err)
+	}
+	if len(listed) != 0 {
+		t.Fatalf("Expected GET /api/events to exclude the hidden event, got %v", listed)
+	}
+
+	againReq, err := http.NewRequest(http.MethodDelete, server.URL+"/api/events/98164", nil)
+	if err != nil {
+		t.Fatalf("Failed to build request: %v", err)
+	}
+	againResp, err := http.DefaultClient.Do(againReq)
+	if err != nil {
+		t.Fatalf("Failed to make request: %v", err)
+	}
+	defer againResp.Body.Close()
+	if againResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("Expected a second DELETE to return 404, got %d", againResp.StatusCode)
 	}
 }
