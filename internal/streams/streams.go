@@ -27,6 +27,14 @@ const (
 	EventsConsumerAckWait         = 30 * time.Second
 
 	streamMaxAge = 90 * 24 * time.Hour
+
+	// eventsDedupWindow is how long JetStream remembers a message ID on
+	// EVENTS. The scraper runs hourly and publishes each session with
+	// WithMsgID(eventID), so the server's 2-minute default never catches a
+	// repeat from the next run. Seven days covers a week of web-ui-api
+	// being down or behind; the scraper's seen bucket covers the rest.
+	// Manual retries and purchases use unique IDs, so they are unaffected.
+	eventsDedupWindow = 7 * 24 * time.Hour
 )
 
 // NotificationsSubjects returns every subject on the NOTIFICATIONS stream:
@@ -41,27 +49,41 @@ func NotificationsSubjects() []string {
 	}
 }
 
-// EnsureStreams creates or updates the EVENTS and NOTIFICATIONS streams.
-// Safe to call from every service on startup; JetStream treats it as a
-// no-op when the config already matches.
-func EnsureStreams(ctx context.Context, js jetstream.JetStream) error {
-	if _, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
-		Name:      EventsStreamName,
-		Subjects:  []string{EventsSubject, PurchasedSubject},
-		Storage:   jetstream.FileStorage,
-		Retention: jetstream.LimitsPolicy,
-		MaxAge:    streamMaxAge,
-	}); err != nil {
-		return fmt.Errorf("ensure %s stream: %w", EventsStreamName, err)
+// EventsStreamConfig is the EVENTS stream's config. Every service applies
+// it on startup through EnsureStreams, so an image built before a change
+// here resets the stream to its own copy when it starts: release all
+// images together after changing it.
+func EventsStreamConfig() jetstream.StreamConfig {
+	return jetstream.StreamConfig{
+		Name:       EventsStreamName,
+		Subjects:   []string{EventsSubject, PurchasedSubject},
+		Storage:    jetstream.FileStorage,
+		Retention:  jetstream.LimitsPolicy,
+		MaxAge:     streamMaxAge,
+		Duplicates: eventsDedupWindow,
 	}
+}
 
-	if _, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
+// NotificationsStreamConfig is the NOTIFICATIONS stream's config.
+func NotificationsStreamConfig() jetstream.StreamConfig {
+	return jetstream.StreamConfig{
 		Name:      NotificationsStreamName,
 		Subjects:  NotificationsSubjects(),
 		Storage:   jetstream.FileStorage,
 		Retention: jetstream.LimitsPolicy,
 		MaxAge:    streamMaxAge,
-	}); err != nil {
+	}
+}
+
+// EnsureStreams creates or updates the EVENTS and NOTIFICATIONS streams.
+// Safe to call from every service on startup; JetStream treats it as a
+// no-op when the config already matches.
+func EnsureStreams(ctx context.Context, js jetstream.JetStream) error {
+	if _, err := js.CreateOrUpdateStream(ctx, EventsStreamConfig()); err != nil {
+		return fmt.Errorf("ensure %s stream: %w", EventsStreamName, err)
+	}
+
+	if _, err := js.CreateOrUpdateStream(ctx, NotificationsStreamConfig()); err != nil {
 		return fmt.Errorf("ensure %s stream: %w", NotificationsStreamName, err)
 	}
 
