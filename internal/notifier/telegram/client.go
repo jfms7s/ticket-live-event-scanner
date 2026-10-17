@@ -4,6 +4,7 @@ package telegram
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -60,14 +61,14 @@ func sendTelegramMessage(ctx context.Context, client *http.Client, apiBaseURL, c
 
 	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, strings.NewReader(data.Encode()))
 	if err != nil {
-		return "", fmt.Errorf("create request: %w", err)
+		return "", requestError(method, apiBaseURL, err)
 	}
 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("http request failed: %w", err)
+		return "", requestError(method, apiBaseURL, err)
 	}
 	defer resp.Body.Close()
 
@@ -103,4 +104,30 @@ func sendTelegramMessage(ctx context.Context, client *http.Client, apiBaseURL, c
 	}
 
 	return strconv.FormatInt(telegramResp.Result.MessageID, 10), nil
+}
+
+// requestError wraps a request-creation or transport error without the
+// request URL, which embeds the bot token. net/http returns these as
+// *url.Error, whose text includes the full URL, so it's unwrapped to its
+// cause; redactToken is a backstop for any cause that repeats the URL.
+func requestError(method, apiBaseURL string, err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		err = ue.Err
+	}
+	return redactToken(fmt.Errorf("telegram %s request failed: %w", method, err), apiBaseURL)
+}
+
+// redactToken replaces the bot token (the part of apiBaseURL after "/bot")
+// in err's text with "<redacted>".
+func redactToken(err error, apiBaseURL string) error {
+	i := strings.LastIndex(apiBaseURL, "/bot")
+	if i < 0 {
+		return err
+	}
+	token := apiBaseURL[i+len("/bot"):]
+	if token == "" || !strings.Contains(err.Error(), token) {
+		return err
+	}
+	return errors.New(strings.ReplaceAll(err.Error(), token, "<redacted>"))
 }
