@@ -118,7 +118,11 @@ func main() {
 
 	// Setup HTTP server
 	app := api.NewApp(db, js)
-	handler := api.CORSMiddleware(app.NewMux(), corsOrigin)
+	if corsOrigin == "*" {
+		log.Println("WARNING: CORS_ORIGIN=* lets any website call mutating endpoints; set it to the dashboard origin")
+	}
+	// CORS outermost, so preflights are answered before the header check.
+	handler := api.CORSMiddleware(api.RequireCustomHeader(app.NewMux()), corsOrigin)
 
 	server := &http.Server{
 		Addr:    listenAddr,
