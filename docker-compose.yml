@@ -44,7 +44,8 @@ services:
       TURSO_DATABASE_URL: http://libsql:8080
       TURSO_AUTH_TOKEN: local
       LISTEN_ADDR: :8080
-      CORS_ORIGIN: "*"
+      # The dashboard (port 3000) calls the API cross-origin; never "*" (unauthenticated mutating endpoints).
+      CORS_ORIGIN: http://localhost:3000
     ports:
       - "8080:8080"
 

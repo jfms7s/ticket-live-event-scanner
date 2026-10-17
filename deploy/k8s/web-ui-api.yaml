@@ -60,12 +60,11 @@ spec:
         - name: LISTEN_ADDR
           value: ":8080"
         - name: CORS_ORIGIN
-          # web-ui-frontend runs as a separate Service/origin in-cluster, so the
-          # browser-side dashboard needs CORS to call this API at all. "*" is
-          # acceptable here per the already-confirmed no-auth, cluster-internal-only
-          # decision (docs/design.md §2) — nothing sensitive is exposed by relaxing
-          # this since the whole API is unauthenticated and unreachable externally.
-          value: "*"
+          # web-ui-frontend runs as a separate Service/origin, so the dashboard
+          # needs CORS to call this API. Never "*": the API is unauthenticated and
+          # has mutating endpoints, so "*" would let any website a visitor opens
+          # drive them. Set this to the dashboard's origin (here a port-forward).
+          value: "http://localhost:3000"
         resources:
           requests:
             cpu: 50m

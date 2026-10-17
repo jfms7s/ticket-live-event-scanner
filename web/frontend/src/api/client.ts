@@ -18,9 +18,14 @@ export async function fetchEvents(status: EventStatusFilter): Promise<Event[]> {
   return (await response.json()) || [];
 }
 
+// The API refuses POST, PATCH and DELETE without this header (a cross-site
+// page can't add it without passing CORS); see RequireCustomHeader.
+const MUTATION_HEADERS = { 'X-Requested-With': 'ticket-scanner' };
+
 export async function retriggerEvent(eventId: number): Promise<void> {
   const response = await fetch(`${baseUrl()}/api/events/${eventId}/retrigger`, {
     method: 'POST',
+    headers: MUTATION_HEADERS,
   });
   if (response.status === 202 || response.ok) {
     return;
@@ -34,7 +39,7 @@ export async function retriggerEvent(eventId: number): Promise<void> {
 export async function setPurchased(eventId: number, purchased: boolean): Promise<void> {
   const response = await fetch(`${baseUrl()}/api/events/${eventId}/purchased`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { ...MUTATION_HEADERS, 'Content-Type': 'application/json' },
     body: JSON.stringify({ purchased }),
   });
   if (!response.ok) {
@@ -45,6 +50,7 @@ export async function setPurchased(eventId: number, purchased: boolean): Promise
 export async function deleteEvent(eventId: number): Promise<void> {
   const response = await fetch(`${baseUrl()}/api/events/${eventId}`, {
     method: 'DELETE',
+    headers: MUTATION_HEADERS,
   });
   if (!response.ok && response.status !== 404) {
     throw new ApiError(`API error: ${response.status}`);
