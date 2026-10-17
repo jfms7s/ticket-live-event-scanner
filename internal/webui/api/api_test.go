@@ -65,6 +65,7 @@ func setupTestSchema(ctx context.Context, db *sql.DB) error {
 			triggered_by        TEXT NOT NULL DEFAULT 'scraper'
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_notifications_event_id ON notifications(event_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_events_discovered_at ON events(discovered_at)`,
 	}
 
 	for _, table := range tables {

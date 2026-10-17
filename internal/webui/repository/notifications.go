@@ -271,3 +271,31 @@ func ListNotifications(ctx context.Context, db *sql.DB, status string) ([]Notifi
 
 	return notifs, nil
 }
+
+// listNotificationsByEvent returns every notification grouped by event id,
+// newest attempt first within each event, in a single query.
+func listNotificationsByEvent(ctx context.Context, db *sql.DB) (map[int64][]NotificationInEventResponse, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT id, event_id, status, telegram_message_id, attempted_at, confirmed_at, error, triggered_by
+		FROM notifications
+		ORDER BY event_id, attempted_at DESC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query notifications: %w", err)
+	}
+	defer rows.Close()
+
+	byEvent := make(map[int64][]NotificationInEventResponse)
+	for rows.Next() {
+		var n NotificationInEventResponse
+		var eventID int64
+		if err := rows.Scan(&n.ID, &eventID, &n.Status, &n.TelegramMessageID, &n.AttemptedAt, &n.ConfirmedAt, &n.Error, &n.TriggeredBy); err != nil {
+			return nil, fmt.Errorf("scan notification row: %w", err)
+		}
+		byEvent[eventID] = append(byEvent[eventID], n)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+	return byEvent, nil
+}

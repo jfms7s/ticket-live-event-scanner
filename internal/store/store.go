@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 
 CREATE INDEX IF NOT EXISTS idx_notifications_event_id ON notifications(event_id);
+CREATE INDEX IF NOT EXISTS idx_events_discovered_at ON events(discovered_at);
 `
 
 // Connect opens a libSQL connection to Turso. dbURL is expected in the
