@@ -1,7 +1,7 @@
 # Multi-stage build for web-ui-api
 
 # Stage 1: Build
-FROM --platform=$BUILDPLATFORM golang:1.25.0-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS builder
 
 WORKDIR /build
 
@@ -23,7 +23,7 @@ ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o web-ui-api ./cmd/web-ui-api
 
 # Stage 2: Runtime
-FROM alpine:latest
+FROM alpine:3.24
 
 # Install ca-certificates for HTTPS
 RUN apk --no-cache add ca-certificates
