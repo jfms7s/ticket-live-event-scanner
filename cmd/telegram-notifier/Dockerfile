@@ -1,5 +1,5 @@
 # Multi-stage build for telegram-notifier
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS builder
 
 WORKDIR /build
 
@@ -22,7 +22,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -a -installsuffix c
     -o telegram-notifier ./cmd/telegram-notifier
 
 # Final stage: Alpine runtime with shell for liveness probe
-FROM alpine:latest
+FROM alpine:3.24
 
 # Install ca-certificates for HTTPS
 RUN apk --no-cache add ca-certificates
