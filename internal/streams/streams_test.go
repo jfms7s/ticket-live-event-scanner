@@ -1,6 +1,8 @@
 package streams
 
 import (
+	"github.com/nats-io/nats.go/jetstream"
+
 	"testing"
 	"time"
 )
@@ -51,5 +53,18 @@ func TestEventsStreamDedupWindowSpansScrapeRuns(t *testing.T) {
 	}
 	if cfg.Name != EventsStreamName {
 		t.Errorf("EVENTS Name = %q, want %q", cfg.Name, EventsStreamName)
+	}
+}
+
+func TestSeenBucketConfig(t *testing.T) {
+	cfg := SeenBucketConfig()
+	if cfg.Bucket != SeenBucketName {
+		t.Errorf("Bucket = %q, want %q", cfg.Bucket, SeenBucketName)
+	}
+	if cfg.TTL != 0 {
+		t.Errorf("TTL = %v, want 0: a seen key must never expire, or the event is notified again", cfg.TTL)
+	}
+	if cfg.Storage != jetstream.FileStorage {
+		t.Errorf("Storage = %v, want file storage", cfg.Storage)
 	}
 }

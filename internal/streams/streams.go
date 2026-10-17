@@ -135,3 +135,28 @@ func EnsureEmailConsumer(ctx context.Context, js jetstream.JetStream) (jetstream
 
 	return consumer, nil
 }
+
+// SeenBucketName is the JetStream KV bucket where the scraper records each
+// event ID it has published, so later runs don't publish it again. Only
+// the scraper reads or writes it.
+const SeenBucketName = "SCRAPER_SEEN_EVENTS"
+
+// SeenBucketConfig is the seen bucket's config. Keys never expire (no TTL):
+// an expired key would let a still-listed event be notified again.
+func SeenBucketConfig() jetstream.KeyValueConfig {
+	return jetstream.KeyValueConfig{
+		Bucket:      SeenBucketName,
+		Description: "Event IDs the scraper has published (key: event ID, value: when)",
+		History:     1,
+		Storage:     jetstream.FileStorage,
+	}
+}
+
+// EnsureSeenBucket creates or updates the seen bucket and returns it.
+func EnsureSeenBucket(ctx context.Context, js jetstream.JetStream) (jetstream.KeyValue, error) {
+	kv, err := js.CreateOrUpdateKeyValue(ctx, SeenBucketConfig())
+	if err != nil {
+		return nil, fmt.Errorf("ensure %s bucket: %w", SeenBucketName, err)
+	}
+	return kv, nil
+}

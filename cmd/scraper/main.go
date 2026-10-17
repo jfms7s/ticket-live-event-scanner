@@ -53,10 +53,17 @@ func run(ctx context.Context, cfg config.Config) error {
 		return fmt.Errorf("ensure streams: %w", err)
 	}
 
-	// Create scraper instance
-	scraper := discovery.New(cfg, db, js)
+	// The scraper's own record of what it has published (see
+	// streams.SeenBucketName).
+	seen, err := streams.EnsureSeenBucket(ctx, js)
+	if err != nil {
+		return fmt.Errorf("ensure seen bucket: %w", err)
+	}
 
-	// Load known event IDs from database
+	// Create scraper instance
+	scraper := discovery.New(cfg, db, js, seen)
+
+	// Load seen event IDs (seen bucket plus the events table)
 	if err := scraper.LoadKnownIDs(ctx); err != nil {
 		return fmt.Errorf("load known event IDs: %w", err)
 	}

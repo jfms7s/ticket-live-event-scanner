@@ -54,10 +54,11 @@ type Scraper struct {
 	Stats    Stats
 }
 
-// New constructs a Scraper against the given config, database, and
-// JetStream context.
-func New(cfg config.Config, db *sql.DB, js jetstream.JetStream) *Scraper {
-	return newScraper(cfg, baseURL, dbSeenStore{db: db}, js)
+// New constructs a Scraper that publishes through js and keeps its seen
+// set in the seen KV bucket (see streams.EnsureSeenBucket), also reading
+// the IDs already in web-ui-api's events table from db.
+func New(cfg config.Config, db *sql.DB, js jetstream.JetStream, seen jetstream.KeyValue) *Scraper {
+	return newScraper(cfg, baseURL, newSeenStore(seen, db), js)
 }
 
 // newScraper builds a Scraper that fetches from site (baseURL in

@@ -77,7 +77,7 @@ func (s *Scraper) fetchAndPublishEvent(ctx context.Context, basicEvent event.Dis
 		return fmt.Errorf("marshal event: %w", err)
 	}
 
-	_, err = s.pub.Publish(ctx, streams.EventsSubject, data,
+	ack, err := s.pub.Publish(ctx, streams.EventsSubject, data,
 		jetstream.WithMsgID(strconv.FormatInt(basicEvent.EventID, 10)))
 	if err != nil {
 		return fmt.Errorf("publish event: %w", err)
@@ -88,7 +88,21 @@ func (s *Scraper) fetchAndPublishEvent(ctx context.Context, basicEvent event.Dis
 	// (e.g. the same hub session appearing across multiple month searches).
 	s.knownIDs[basicEvent.EventID] = true
 
-	s.Stats.EventsPublished++
-	log.Printf("Published event %d: %s", basicEvent.EventID, detailEvent.Title)
+	if ack != nil && ack.Duplicate {
+		// The stream still remembers this message ID (7-day window), so
+		// nothing was delivered: an earlier run published it but didn't
+		// get to mark it seen.
+		log.Printf("Event %d already on the stream; marking it seen", basicEvent.EventID)
+	} else {
+		s.Stats.EventsPublished++
+		log.Printf("Published event %d: %s", basicEvent.EventID, detailEvent.Title)
+	}
+
+	// Without the mark, the next runs rely on the stream's message-ID
+	// window and on web-ui-api materialising the event, so fail the run
+	// loudly rather than carry on as if all were well.
+	if err := s.seen.Mark(ctx, basicEvent.EventID); err != nil {
+		return fmt.Errorf("event %d published but not marked seen: %w", basicEvent.EventID, err)
+	}
 	return nil
 }
