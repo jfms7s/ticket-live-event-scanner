@@ -10,7 +10,6 @@ import (
 
 	"github.com/jfms7s/ticket-live-event-scanner/internal/event"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/notifier/policy"
-	"github.com/jfms7s/ticket-live-event-scanner/internal/notifier/telegram"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/streams"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -121,7 +120,7 @@ func (h *Handler) HandleMessage(ctx context.Context, msg jetstream.Msg) error {
 	}
 
 	// Try to send Telegram message
-	telegramMessageID, telegramErr := telegram.SendTelegramMessage(ctx, h.telegramBotToken, h.telegramChatID, discovered)
+	telegramMessageID, telegramErr := h.send(ctx, discovered)
 
 	if telegramErr == nil {
 		// Success: IMMEDIATELY record in cache to protect against NATS publish failures

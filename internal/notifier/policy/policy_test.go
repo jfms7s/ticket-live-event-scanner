@@ -1,7 +1,6 @@
 package policy
 
 import (
-	"fmt"
 	"testing"
 	"time"
 
@@ -126,43 +125,6 @@ func TestDecideActionWithStandardMaxDeliver(t *testing.T) {
 	}
 }
 
-// TestHandleMessageRetryBranch tests nak with backoff on failure with attempts remaining
-func TestHandleMessageRetryBranch(t *testing.T) {
-	maxDeliveries := streams.EventsConsumerMaxDeliver
-
-	for attemptNum := 1; attemptNum < maxDeliveries; attemptNum++ {
-		// Test that decisions are correct for each attempt < max
-		action := DecideAction(attemptNum, maxDeliveries)
-		if action != ActionNak {
-			t.Errorf("Attempt %d/%d should return ActionNak, got %v", attemptNum, maxDeliveries, action)
-		}
-
-		// Test that backoff delay increases exponentially
-		delay := BackoffDelay(attemptNum)
-		expectedDelay := time.Duration(attemptNum) * 5 * time.Second
-		if delay != expectedDelay {
-			t.Errorf("Attempt %d backoff delay = %v, expected %v", attemptNum, delay, expectedDelay)
-		}
-	}
-}
-
-// TestHandleMessageTerminalBranch tests publish and term on final attempt failure
-func TestHandleMessageTerminalBranch(t *testing.T) {
-	maxDeliveries := streams.EventsConsumerMaxDeliver
-
-	// At max deliveries, should term
-	action := DecideAction(maxDeliveries, maxDeliveries)
-	if action != ActionTerm {
-		t.Errorf("At max deliveries should return ActionTerm, got %v", action)
-	}
-
-	// Beyond max should also term
-	action = DecideAction(maxDeliveries+1, maxDeliveries)
-	if action != ActionTerm {
-		t.Errorf("Beyond max deliveries should return ActionTerm, got %v", action)
-	}
-}
-
 // TestBackoffExponentialProgression verifies backoff increases correctly
 func TestBackoffExponentialProgression(t *testing.T) {
 	expected := []time.Duration{
@@ -219,115 +181,5 @@ func TestDecisionBoundaryConditions(t *testing.T) {
 					tt.delivered, tt.max, action, tt.expected)
 			}
 		})
-	}
-}
-
-// Integration tests for the three policy branches (success, retry, terminal)
-
-// TestPolicySuccessBranch documents the success path behavior
-// Actual testing is in TestSendTelegramMessageSuccess (telegram package) which
-// verifies Telegram 2xx + ok:true.
-// In full integration, this results in: publish notifications.sent + ack message
-func TestPolicySuccessBranch(t *testing.T) {
-	// This test documents that on successful Telegram send (2xx + ok:true):
-	// 1. SendTelegramMessage returns a message_id
-	// 2. publishNotificationSent publishes to notifications.sent subject
-	// 3. msg.Ack() is called to acknowledge the message
-	//
-	// Unit test coverage exists for:
-	// - telegram.TestSendTelegramMessageSuccess verifies Telegram succeeds
-	// - The Handler.HandleMessage logic (untestable without full mock) would:
-	//   a. Call SendTelegramMessage (verified via TestSendTelegramMessageSuccess)
-	//   b. Call publishNotificationSent with the returned message_id
-	//   c. Call msg.Ack() on success
-
-	// Verify precondition: Telegram success path returns message_id
-	messageID := "12345"
-	if messageID == "" {
-		t.Error("Telegram success should return non-empty message_id")
-	}
-}
-
-// TestPolicyRetryBranch tests: failure with attempts < MaxDeliver → NakWithDelay, no publish
-func TestPolicyRetryBranch(t *testing.T) {
-	// This test verifies the retry path (attempts 1-4 of 5):
-	// 1. Telegram fails
-	// 2. Message is nak'd with exponential backoff
-	// 3. Neither notifications.sent nor notifications.failed is published
-
-	for attemptNum := 1; attemptNum < streams.EventsConsumerMaxDeliver; attemptNum++ {
-		t.Run(fmt.Sprintf("attempt_%d", attemptNum), func(t *testing.T) {
-			// On retry attempts (< MaxDeliver), DecideAction should return ActionNak
-			action := DecideAction(attemptNum, streams.EventsConsumerMaxDeliver)
-			if action != ActionNak {
-				t.Errorf("Attempt %d should decide ActionNak, got %v", attemptNum, action)
-			}
-
-			// Backoff should be present
-			delay := BackoffDelay(attemptNum)
-			expectedDelay := time.Duration(attemptNum) * 5 * time.Second
-			if delay != expectedDelay {
-				t.Errorf("Attempt %d backoff = %v, expected %v", attemptNum, delay, expectedDelay)
-			}
-
-			// In the actual flow, this would result in msg.NakWithDelay(delay)
-			// and NO publish to notifications.sent or notifications.failed
-		})
-	}
-}
-
-// TestPolicyTerminalBranch tests: failure at MaxDeliver → publish notifications.failed + Term
-func TestPolicyTerminalBranch(t *testing.T) {
-	// This test verifies the terminal failure path:
-	// 1. Message has already been delivered 5 times (at MaxDeliver)
-	// 2. Telegram fails on the final attempt
-	// 3. notifications.failed is published with error details
-	// 4. Message is terminated (no more redelivery)
-
-	maxDeliver := streams.EventsConsumerMaxDeliver
-
-	// On final attempt (at MaxDeliver), DecideAction should return ActionTerm
-	action := DecideAction(maxDeliver, maxDeliver)
-	if action != ActionTerm {
-		t.Errorf("At max deliveries should decide ActionTerm, got %v", action)
-	}
-
-	// Beyond max should also term
-	action = DecideAction(maxDeliver+1, maxDeliver)
-	if action != ActionTerm {
-		t.Errorf("Beyond max deliveries should decide ActionTerm, got %v", action)
-	}
-
-	// In the actual flow, this would result in:
-	// 1. notifications.failed published with {event_id, error, failed_at, attempts}
-	// 2. msg.Term() called to stop redelivery
-}
-
-// TestCacheDeduplicationLogic verifies the cache prevents duplicate Telegram sends
-func TestCacheDeduplicationLogic(t *testing.T) {
-	maxDeliveries := streams.EventsConsumerMaxDeliver
-
-	// Simulate scenario: Telegram succeeds, NATS publish fails, message redelivered
-
-	// First attempt succeeds with Telegram - on success, we ack the message
-	_ = int64(999) // event_id that would be cached
-
-	// On redelivery (attempt 2), we check cache:
-	// - If eventID in cache with sentAt < 1 minute, skip sending to Telegram again
-	// - Just attempt to republish notifications.sent
-	// - Still respect MaxDeliver for the republish attempt itself
-
-	for attempt := 2; attempt <= maxDeliveries; attempt++ {
-		action := DecideAction(attempt, maxDeliveries)
-
-		if attempt < maxDeliveries {
-			if action != ActionNak {
-				t.Errorf("Cached redelivery attempt %d should nak, got %v", attempt, action)
-			}
-		} else {
-			if action != ActionTerm {
-				t.Errorf("Final redelivery attempt %d should term, got %v", attempt, action)
-			}
-		}
 	}
 }
