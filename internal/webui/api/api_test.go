@@ -52,7 +52,9 @@ func setupTestSchema(ctx context.Context, db *sql.DB) error {
 			url           TEXT NOT NULL,
 			image_url     TEXT,
 			discovered_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			purchased     BOOLEAN NOT NULL DEFAULT 0
+			purchased     BOOLEAN NOT NULL DEFAULT 0,
+			invite_status TEXT CHECK (invite_status IN ('pending','sent','failed')),
+			invite_error  TEXT
 		)`,
 		`CREATE TABLE IF NOT EXISTS notifications (
 			id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -79,6 +81,8 @@ func setupTestSchema(ctx context.Context, db *sql.DB) error {
 // MockJetStream is a minimal mock that records published messages.
 type MockJetStream struct {
 	publishedMessages []publishedMessage
+	// publishErr, when set, is returned by every Publish (nothing is recorded).
+	publishErr error
 }
 
 type publishedMessage struct {
@@ -96,6 +100,9 @@ func (m *MockJetStream) Publish(ctx context.Context, subject string, data []byte
 	// opts are jetstream.PublishOpt values; in a real test we'd extract msgID,
 	// but for this test we just verify the message was published
 	_ = opts
+	if m.publishErr != nil {
+		return nil, m.publishErr
+	}
 	m.publishedMessages = append(m.publishedMessages, publishedMessage{
 		subject: subject,
 		data:    data,

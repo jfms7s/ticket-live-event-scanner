@@ -21,6 +21,10 @@ export interface Event {
   purchased: boolean;
   status: string;
   notifications: Notification[];
+  // Calendar-invite email state; null when the event was never purchased,
+  // or was purchased before invites were tracked.
+  invite_status: 'pending' | 'sent' | 'failed' | null;
+  invite_error: string | null;
 }
 
 export type SortKey =

@@ -315,6 +315,13 @@ header p {
   text-align: center;
 }
 
+.event-purchased .invite-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-top: 6px;
+}
+
 .event-purchased input[type='checkbox'] {
   width: 18px;
   height: 18px;

@@ -13,21 +13,30 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
+// notificationsConsumerConfig is the durable web-ui-api-notifications
+// consumer. It lists the subjects handleNotification handles explicitly:
+// the email results have three tokens, which a "notifications.*" filter
+// never matched. JetStream lets CreateOrUpdateConsumer change the filter of
+// an existing durable pull consumer, which keeps its position.
+func notificationsConsumerConfig() jetstream.ConsumerConfig {
+	return jetstream.ConsumerConfig{
+		Durable:        "web-ui-api-notifications",
+		AckPolicy:      jetstream.AckExplicitPolicy,
+		MaxDeliver:     streams.EventsConsumerMaxDeliver,
+		AckWait:        streams.EventsConsumerAckWait,
+		FilterSubjects: streams.NotificationsSubjects(),
+	}
+}
+
 // CreateOrUpdateNotificationsConsumer creates or updates the durable
-// consumer used by web-ui-api to read notifications.sent and notifications.failed.
+// consumer used by web-ui-api to read Telegram and email delivery results.
 func CreateOrUpdateNotificationsConsumer(ctx context.Context, js jetstream.JetStream) (jetstream.Consumer, error) {
 	stream, err := js.Stream(ctx, streams.NotificationsStreamName)
 	if err != nil {
 		return nil, fmt.Errorf("get %s stream: %w", streams.NotificationsStreamName, err)
 	}
 
-	consumer, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
-		Durable:       "web-ui-api-notifications",
-		AckPolicy:     jetstream.AckExplicitPolicy,
-		MaxDeliver:    streams.EventsConsumerMaxDeliver,
-		AckWait:       streams.EventsConsumerAckWait,
-		FilterSubject: streams.NotificationsAllSubjects,
-	})
+	consumer, err := stream.CreateOrUpdateConsumer(ctx, notificationsConsumerConfig())
 	if err != nil {
 		return nil, fmt.Errorf("create notifications consumer: %w", err)
 	}
@@ -35,8 +44,8 @@ func CreateOrUpdateNotificationsConsumer(ctx context.Context, js jetstream.JetSt
 	return consumer, nil
 }
 
-// ConsumeNotifications reads from the notifications consumer and updates
-// notification statuses in the database.
+// ConsumeNotifications reads from the notifications consumer and applies
+// each delivery result to the database.
 func ConsumeNotifications(ctx context.Context, consumer jetstream.Consumer, db *sql.DB) {
 	msgsChan, err := consumer.Messages()
 	if err != nil {
@@ -57,40 +66,76 @@ func ConsumeNotifications(ctx context.Context, consumer jetstream.Consumer, db *
 			log.Printf("Error receiving message: %v", err)
 			return
 		}
+		handleNotification(ctx, db, msg)
+	}
+}
 
-		// Determine message type by subject
-		subject := msg.Subject()
+// handleNotification applies one delivery result and acks, naks or
+// terminates msg: malformed bodies are terminated (they never parse on
+// retry), database errors are nak'd for redelivery, and a subject it has
+// no branch for is logged and acked.
+func handleNotification(ctx context.Context, db *sql.DB, msg jetstream.Msg) {
+	subject := msg.Subject()
 
-		if subject == streams.NotificationsSentSubject {
-			var sent event.NotificationSent
-			if err := json.Unmarshal(msg.Data(), &sent); err != nil {
-				log.Printf("Failed to unmarshal NotificationSent message: %v", err)
-				// Malformed message will never become parseable on retry, so terminate it
-				msg.Term()
-				continue
-			}
-
-			if err := repository.UpdateNotificationSent(ctx, db, &sent); err != nil {
-				log.Printf("Failed to update notification sent for event %d: %v", sent.EventID, err)
-				msg.Nak()
-				continue
-			}
-		} else if subject == streams.NotificationsFailSubject {
-			var failed event.NotificationFailed
-			if err := json.Unmarshal(msg.Data(), &failed); err != nil {
-				log.Printf("Failed to unmarshal NotificationFailed message: %v", err)
-				// Malformed message will never become parseable on retry, so terminate it
-				msg.Term()
-				continue
-			}
-
-			if err := repository.UpdateNotificationFailed(ctx, db, &failed); err != nil {
-				log.Printf("Failed to update notification failed for event %d: %v", failed.EventID, err)
-				msg.Nak()
-				continue
-			}
+	switch subject {
+	case streams.NotificationsSentSubject:
+		var sent event.NotificationSent
+		if !decode(msg, &sent, "NotificationSent") {
+			return
+		}
+		if err := repository.UpdateNotificationSent(ctx, db, &sent); err != nil {
+			log.Printf("Failed to update notification sent for event %d: %v", sent.EventID, err)
+			msg.Nak()
+			return
 		}
 
-		msg.Ack()
+	case streams.NotificationsFailSubject:
+		var failed event.NotificationFailed
+		if !decode(msg, &failed, "NotificationFailed") {
+			return
+		}
+		if err := repository.UpdateNotificationFailed(ctx, db, &failed); err != nil {
+			log.Printf("Failed to update notification failed for event %d: %v", failed.EventID, err)
+			msg.Nak()
+			return
+		}
+
+	case streams.NotificationsEmailSentSubject:
+		var sent event.EmailSent
+		if !decode(msg, &sent, "EmailSent") {
+			return
+		}
+		if err := repository.UpdateInviteSent(ctx, db, sent.EventID); err != nil {
+			log.Printf("Failed to update invite sent for event %d: %v", sent.EventID, err)
+			msg.Nak()
+			return
+		}
+
+	case streams.NotificationsEmailFailSubject:
+		var failed event.EmailFailed
+		if !decode(msg, &failed, "EmailFailed") {
+			return
+		}
+		if err := repository.UpdateInviteFailed(ctx, db, failed.EventID, failed.Error); err != nil {
+			log.Printf("Failed to update invite failed for event %d: %v", failed.EventID, err)
+			msg.Nak()
+			return
+		}
+
+	default:
+		log.Printf("WARN unhandled subject %s", subject)
 	}
+
+	msg.Ack()
+}
+
+// decode unmarshals msg into v, terminating msg and returning false if the
+// body is malformed, since it will never become parseable on retry.
+func decode(msg jetstream.Msg, v any, name string) bool {
+	if err := json.Unmarshal(msg.Data(), v); err != nil {
+		log.Printf("Failed to unmarshal %s message: %v", name, err)
+		msg.Term()
+		return false
+	}
+	return true
 }

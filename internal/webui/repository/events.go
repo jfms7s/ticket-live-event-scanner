@@ -12,7 +12,8 @@ import (
 // ListEvents returns events with their status computed as of now.
 func ListEvents(ctx context.Context, db *sql.DB, status string, now time.Time) ([]EventResponse, error) {
 	query := `
-		SELECT id, slug, title, venue, category, event_date, url, image_url, discovered_at, purchased
+		SELECT id, slug, title, venue, category, event_date, url, image_url, discovered_at, purchased,
+		       invite_status, invite_error
 		FROM events
 		ORDER BY discovered_at DESC
 	`
@@ -35,13 +36,14 @@ func ListEvents(ctx context.Context, db *sql.DB, status string, now time.Time) (
 		venue, category, eventDate, imageURL *string
 		discoveredAtStr                      string
 		purchased                            bool
+		inviteStatus, inviteError            *string
 		computedStatus                       string
 	}
 	var bases []eventBase
 
 	for rows.Next() {
 		var b eventBase
-		if err := rows.Scan(&b.id, &b.slug, &b.title, &b.venue, &b.category, &b.eventDate, &b.url, &b.imageURL, &b.discoveredAtStr, &b.purchased); err != nil {
+		if err := rows.Scan(&b.id, &b.slug, &b.title, &b.venue, &b.category, &b.eventDate, &b.url, &b.imageURL, &b.discoveredAtStr, &b.purchased, &b.inviteStatus, &b.inviteError); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("scan row: %w", err)
 		}
@@ -85,6 +87,8 @@ func ListEvents(ctx context.Context, db *sql.DB, status string, now time.Time) (
 			Purchased:     b.purchased,
 			Status:        b.computedStatus,
 			Notifications: notifs,
+			InviteStatus:  b.inviteStatus,
+			InviteError:   b.inviteError,
 		})
 	}
 
@@ -95,7 +99,8 @@ func ListEvents(ctx context.Context, db *sql.DB, status string, now time.Time) (
 // GetEvent returns one event with its status computed as of now.
 func GetEvent(ctx context.Context, db *sql.DB, id int64, now time.Time) (*EventResponse, error) {
 	query := `
-		SELECT id, slug, title, venue, category, event_date, url, image_url, discovered_at, purchased
+		SELECT id, slug, title, venue, category, event_date, url, image_url, discovered_at, purchased,
+		       invite_status, invite_error
 		FROM events
 		WHERE id = ?
 	`
@@ -104,8 +109,9 @@ func GetEvent(ctx context.Context, db *sql.DB, id int64, now time.Time) (*EventR
 	var venue, category, eventDate, imageURL *string
 	var discoveredAtStr string
 	var purchased bool
+	var inviteStatus, inviteError *string
 
-	if err := db.QueryRowContext(ctx, query, id).Scan(&id, &slug, &title, &venue, &category, &eventDate, &url, &imageURL, &discoveredAtStr, &purchased); err != nil {
+	if err := db.QueryRowContext(ctx, query, id).Scan(&id, &slug, &title, &venue, &category, &eventDate, &url, &imageURL, &discoveredAtStr, &purchased, &inviteStatus, &inviteError); err != nil {
 		return nil, err
 	}
 
@@ -131,13 +137,22 @@ func GetEvent(ctx context.Context, db *sql.DB, id int64, now time.Time) (*EventR
 		Purchased:     purchased,
 		Status:        computedStatus,
 		Notifications: notifs,
+		InviteStatus:  inviteStatus,
+		InviteError:   inviteError,
 	}, nil
 }
 
 // SetEventPurchased updates the purchased flag for a single event. It
-// returns sql.ErrNoRows if no event with that ID exists.
+// returns sql.ErrNoRows if no event with that ID exists. Marking an event
+// purchased also sets its invite to pending (clearing any earlier error) in
+// the same UPDATE, since the caller then publishes a new invite request.
+// Unmarking leaves the invite state alone: an invite already sent stays sent.
 func SetEventPurchased(ctx context.Context, db *sql.DB, id int64, purchased bool) error {
-	result, err := db.ExecContext(ctx, `UPDATE events SET purchased = ? WHERE id = ?`, purchased, id)
+	query := `UPDATE events SET purchased = ? WHERE id = ?`
+	if purchased {
+		query = `UPDATE events SET purchased = ?, invite_status = 'pending', invite_error = NULL WHERE id = ?`
+	}
+	result, err := db.ExecContext(ctx, query, purchased, id)
 	if err != nil {
 		return fmt.Errorf("update purchased: %w", err)
 	}

@@ -51,7 +51,9 @@ func setupTestSchema(ctx context.Context, db *sql.DB) error {
 			url           TEXT NOT NULL,
 			image_url     TEXT,
 			discovered_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			purchased     BOOLEAN NOT NULL DEFAULT 0
+			purchased     BOOLEAN NOT NULL DEFAULT 0,
+			invite_status TEXT CHECK (invite_status IN ('pending','sent','failed')),
+			invite_error  TEXT
 		)`,
 		`CREATE TABLE IF NOT EXISTS notifications (
 			id                  INTEGER PRIMARY KEY AUTOINCREMENT,

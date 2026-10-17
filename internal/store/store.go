@@ -26,7 +26,9 @@ CREATE TABLE IF NOT EXISTS events (
     url           TEXT NOT NULL,
     image_url     TEXT,
     discovered_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    purchased     BOOLEAN NOT NULL DEFAULT 0
+    purchased     BOOLEAN NOT NULL DEFAULT 0,
+    invite_status TEXT CHECK (invite_status IN ('pending','sent','failed')),
+    invite_error  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS notifications (
@@ -64,19 +66,39 @@ func Connect(dbURL, authToken string) (*sql.DB, error) {
 	return db, nil
 }
 
-// Migrate applies Schema. Safe to call repeatedly.
+// addedEventColumns are events columns added after the table already
+// existed in production, where CREATE TABLE IF NOT EXISTS in Schema is a
+// no-op. Migrate adds each one with ALTER TABLE. Every definition must be
+// valid for ADD COLUMN on a table with rows (nullable, or NOT NULL with a
+// default) and must match its line in Schema.
+var addedEventColumns = []string{
+	"purchased BOOLEAN NOT NULL DEFAULT 0",
+	"invite_status TEXT CHECK (invite_status IN ('pending','sent','failed'))",
+	"invite_error TEXT",
+}
+
+// addColumn runs ALTER TABLE ... ADD COLUMN, treating "duplicate column
+// name" as already applied, since SQLite has no ADD COLUMN IF NOT EXISTS.
+func addColumn(ctx context.Context, db *sql.DB, table, def string) error {
+	if _, err := db.ExecContext(ctx, "ALTER TABLE "+table+" ADD COLUMN "+def); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			name, _, _ := strings.Cut(def, " ")
+			return fmt.Errorf("add %s.%s column: %w", table, name, err)
+		}
+	}
+	return nil
+}
+
+// Migrate applies Schema, then adds any events columns an older database
+// lacks. Safe to call repeatedly.
 func Migrate(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, Schema); err != nil {
 		return fmt.Errorf("migrate schema: %w", err)
 	}
 
-	// The "purchased" column was added after events already existed in
-	// production, so CREATE TABLE IF NOT EXISTS above is a no-op there —
-	// backfill it with ALTER TABLE, tolerating the "already applied" case
-	// since ALTER TABLE has no IF NOT EXISTS form for ADD COLUMN in SQLite.
-	if _, err := db.ExecContext(ctx, `ALTER TABLE events ADD COLUMN purchased BOOLEAN NOT NULL DEFAULT 0`); err != nil {
-		if !strings.Contains(err.Error(), "duplicate column name") {
-			return fmt.Errorf("migrate schema: add purchased column: %w", err)
+	for _, col := range addedEventColumns {
+		if err := addColumn(ctx, db, "events", col); err != nil {
+			return fmt.Errorf("migrate schema: %w", err)
 		}
 	}
 

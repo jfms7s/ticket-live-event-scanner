@@ -69,7 +69,17 @@ export function App() {
   }
 
   function handlePurchasedChange(eventId: number, purchased: boolean) {
-    setEvents((prev) => prev.map((event) => (event.id === eventId ? { ...event, purchased } : event)));
+    // Ticking records a new invite as pending server-side; mirror that until
+    // the next poll brings the result. Unticking leaves the invite as it is.
+    setEvents((prev) =>
+      prev.map((event) =>
+        event.id !== eventId
+          ? event
+          : purchased
+            ? { ...event, purchased, invite_status: 'pending', invite_error: null }
+            : { ...event, purchased }
+      )
+    );
   }
 
   function handleDeleted(eventId: number) {

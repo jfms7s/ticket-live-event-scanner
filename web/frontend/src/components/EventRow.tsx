@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { deleteEvent as apiDeleteEvent, retriggerEvent, setPurchased } from '../api/client';
 import type { Event } from '../types';
 import { formatDate } from '../utils/format';
+import { getInviteBadge } from '../utils/invite';
 import { getLatestNotificationStatus } from '../utils/notifications';
 import { StatusBadge } from './StatusBadge';
 
@@ -25,6 +26,7 @@ export function EventRow({ event, onPurchasedChange, onDeleted, onError }: Event
   });
 
   const { status: notifStatus, notif } = getLatestNotificationStatus(event.notifications);
+  const invite = getInviteBadge(event);
 
   async function handleRetrigger() {
     setRetrigger({ busy: true, message: 'Retriggering...', kind: 'loading' });
@@ -119,6 +121,17 @@ export function EventRow({ event, onPurchasedChange, onDeleted, onError }: Event
           disabled={purchasedPending}
           onChange={handleTogglePurchased}
         />
+        {invite && (
+          <div className="invite-status">
+            <StatusBadge status={invite.label} type={invite.type} />
+            {invite.error && (
+              <div className="notification-error-detail" title={invite.error}>
+                Error: {invite.error.substring(0, 50)}
+                {invite.error.length > 50 ? '...' : ''}
+              </div>
+            )}
+          </div>
+        )}
       </td>
 
       <td>
