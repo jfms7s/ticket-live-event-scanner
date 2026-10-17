@@ -26,7 +26,7 @@ func (app *App) handleListEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	events, err := repository.ListEvents(r.Context(), app.db, status)
+	events, err := repository.ListEvents(r.Context(), app.db, status, time.Now())
 	if err != nil {
 		log.Printf("Error listing events: %v", err)
 		http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
@@ -49,7 +49,7 @@ func (app *App) handleGetEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	eventResp, err := repository.GetEvent(r.Context(), app.db, id)
+	eventResp, err := repository.GetEvent(r.Context(), app.db, id, time.Now())
 	if err == sql.ErrNoRows {
 		http.Error(w, `{"error":"event not found"}`, http.StatusNotFound)
 		return
@@ -77,7 +77,7 @@ func (app *App) handleRetrigger(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get the event from database
-	eventResp, err := repository.GetEvent(r.Context(), app.db, id)
+	eventResp, err := repository.GetEvent(r.Context(), app.db, id, time.Now())
 	if err == sql.ErrNoRows {
 		http.Error(w, `{"error":"event not found"}`, http.StatusNotFound)
 		return
@@ -187,7 +187,7 @@ func (app *App) handleSetPurchased(w http.ResponseWriter, r *http.Request) {
 // do not fail the purchased-flag request, since the flag itself was
 // already persisted successfully.
 func (app *App) publishPurchased(reqCtx context.Context, id int64) {
-	eventResp, err := repository.GetEvent(reqCtx, app.db, id)
+	eventResp, err := repository.GetEvent(reqCtx, app.db, id, time.Now())
 	if err != nil {
 		log.Printf("Error getting event %d for purchased publish: %v", id, err)
 		return

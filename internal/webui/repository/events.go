@@ -9,7 +9,8 @@ import (
 
 // ListEvents returns all events with their notifications, optionally filtered by status.
 // status can be "" (all), "active", or "finished".
-func ListEvents(ctx context.Context, db *sql.DB, status string) ([]EventResponse, error) {
+// ListEvents returns events with their status computed as of now.
+func ListEvents(ctx context.Context, db *sql.DB, status string, now time.Time) ([]EventResponse, error) {
 	query := `
 		SELECT id, slug, title, venue, category, event_date, url, image_url, discovered_at, purchased
 		FROM events
@@ -37,7 +38,6 @@ func ListEvents(ctx context.Context, db *sql.DB, status string) ([]EventResponse
 		computedStatus                       string
 	}
 	var bases []eventBase
-	now := time.Now()
 
 	for rows.Next() {
 		var b eventBase
@@ -86,7 +86,8 @@ func ListEvents(ctx context.Context, db *sql.DB, status string) ([]EventResponse
 }
 
 // GetEvent returns a single event by ID with its notifications.
-func GetEvent(ctx context.Context, db *sql.DB, id int64) (*EventResponse, error) {
+// GetEvent returns one event with its status computed as of now.
+func GetEvent(ctx context.Context, db *sql.DB, id int64, now time.Time) (*EventResponse, error) {
 	query := `
 		SELECT id, slug, title, venue, category, event_date, url, image_url, discovered_at, purchased
 		FROM events
@@ -103,7 +104,7 @@ func GetEvent(ctx context.Context, db *sql.DB, id int64) (*EventResponse, error)
 	}
 
 	// Compute status
-	computedStatus := computeStatus(eventDate, time.Now())
+	computedStatus := computeStatus(eventDate, now)
 
 	// Get notifications for this event
 	notifs, err := GetNotificationsForEvent(ctx, db, id)

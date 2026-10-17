@@ -38,7 +38,8 @@ func TestGetEventWithNotifications(t *testing.T) {
 	}
 
 	// Test the GetEvent function directly
-	event, err := GetEvent(ctx, db, 98164)
+	// The stored event date is 2026-08-22; fix the clock either side of it.
+	event, err := GetEvent(ctx, db, 98164, time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatalf("Failed to get event: %v", err)
 	}
@@ -53,5 +54,13 @@ func TestGetEventWithNotifications(t *testing.T) {
 
 	if len(event.Notifications) != 1 {
 		t.Fatalf("Expected 1 notification, got %d", len(event.Notifications))
+	}
+
+	later, err := GetEvent(ctx, db, 98164, time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("Failed to get event: %v", err)
+	}
+	if later.Status != "finished" {
+		t.Fatalf("Expected status 'finished' after the event date, got %q", later.Status)
 	}
 }
