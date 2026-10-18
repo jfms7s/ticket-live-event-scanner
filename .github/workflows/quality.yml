@@ -1,0 +1,55 @@
+name: Code quality
+
+# Report-only: never gates the build. The default branch is master.
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Code quality (report-only, eng-metrics-lab)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Dead code, Go (deadcode)
+        env:
+          # setup-go exports GOTOOLCHAIN=local; deadcode@v0.52.0 needs go >= 1.26, so allow the toolchain download.
+          GOTOOLCHAIN: auto
+        run: |
+          mkdir -p .quality
+          go run golang.org/x/tools/cmd/deadcode@v0.52.0 -json ./... > .quality/deadcode-go.json
+        continue-on-error: true
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/frontend/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: web/frontend
+        run: npm ci
+        continue-on-error: true
+      - name: Dead code, TypeScript (knip)
+        run: |
+          mkdir -p .quality
+          cd web/frontend && npx --yes knip@5.88.1 --reporter json --no-exit-code > ../../.quality/deadcode-ts.json
+        continue-on-error: true
+      - name: Code quality (report-only)
+        uses: jfms7s/eng-metrics-lab/action@v0
+        continue-on-error: true
