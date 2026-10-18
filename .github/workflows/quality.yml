@@ -29,6 +29,9 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
       - name: Dead code, Go (deadcode)
+        env:
+          # setup-go exports GOTOOLCHAIN=local; deadcode@v0.52.0 needs go >= 1.26, so allow the toolchain download.
+          GOTOOLCHAIN: auto
         run: |
           mkdir -p .quality
           go run golang.org/x/tools/cmd/deadcode@v0.52.0 -json ./... > .quality/deadcode-go.json
