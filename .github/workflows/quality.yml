@@ -14,8 +14,54 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  test:
+    name: Tests and coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # Report-only: the repo's first test gate must not turn this workflow red.
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/frontend/package-lock.json
+      - name: Go tests with coverage
+        run: |
+          mkdir -p .quality
+          go test -coverpkg=./... -coverprofile="$RUNNER_TEMP/coverage-go.out" ./...
+          mv "$RUNNER_TEMP/coverage-go.out" .quality/coverage-go.out
+      - name: Install frontend dependencies
+        working-directory: web/frontend
+        run: npm ci
+      - name: Frontend tests with coverage
+        working-directory: web/frontend
+        run: |
+          mkdir -p ../../.quality
+          npx vitest run --coverage.enabled --coverage.provider=v8 --coverage.reporter=lcovonly --coverage.reportsDirectory="$RUNNER_TEMP/cov" '--coverage.include=src/**/*.{ts,tsx}'
+          sed 's#^SF:\([^/]\)#SF:web/frontend/\1#' "$RUNNER_TEMP/cov/lcov.info" > "$RUNNER_TEMP/coverage-ts.lcov"
+          mv "$RUNNER_TEMP/coverage-ts.lcov" ../../.quality/coverage-ts.lcov
+      - uses: actions/upload-artifact@v4
+        if: ${{ success() }}
+        with:
+          name: coverage-fragments
+          path: .quality
+          include-hidden-files: true
+          retention-days: 7
+
   quality:
     name: Code quality (report-only, eng-metrics-lab)
+    needs: [test]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -49,6 +95,11 @@ jobs:
         run: |
           mkdir -p .quality
           cd web/frontend && npx --yes knip@5.88.1 --reporter json --no-exit-code > ../../.quality/deadcode-ts.json
+        continue-on-error: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: coverage-fragments
+          path: .quality
         continue-on-error: true
       - name: Code quality (report-only)
         uses: jfms7s/eng-metrics-lab/action@v0
