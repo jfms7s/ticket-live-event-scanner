@@ -43,7 +43,7 @@ func TestHideEventKeepsRowOutOfTheAPI(t *testing.T) {
 	if _, err := GetEvent(ctx, db, 1, now); !errors.Is(err, sql.ErrNoRows) {
 		t.Errorf("GetEvent(hidden) err = %v, want sql.ErrNoRows", err)
 	}
-	if err := SetEventPurchased(ctx, db, 1, true); !errors.Is(err, sql.ErrNoRows) {
+	if _, err := SetEventPurchased(ctx, db, 1, true); !errors.Is(err, sql.ErrNoRows) {
 		t.Errorf("SetEventPurchased(hidden) err = %v, want sql.ErrNoRows", err)
 	}
 

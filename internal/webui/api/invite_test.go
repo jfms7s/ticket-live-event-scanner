@@ -93,3 +93,68 @@ func TestSetPurchasedPublishFailureMarksInviteFailed(t *testing.T) {
 		t.Fatalf("invite_error = %v, want it to carry the publish error", errMsg)
 	}
 }
+
+// Ticking an already-purchased event (a double submit, or a client retry)
+// changes nothing, so it must not send a second invite.
+func TestSetPurchasedTwicePublishesOnce(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	mockJS := NewMockJetStream()
+	app := &App{db: db, js: mockJS}
+	server := httptest.NewServer(app.NewMux())
+	defer server.Close()
+	insertPlainEvent(t, app, "7")
+
+	patchPurchased(t, server, "7", `{"purchased":true}`)
+	patchPurchased(t, server, "7", `{"purchased":true}`)
+
+	if n := len(mockJS.publishedMessages); n != 1 {
+		t.Fatalf("published %d purchased messages, want 1", n)
+	}
+}
+
+// Unticking and ticking again is a real re-purchase (and the way to retry
+// a failed invite), so it publishes again and resets the invite to pending.
+func TestSetPurchasedAgainAfterUntickPublishesAgain(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	mockJS := NewMockJetStream()
+	app := &App{db: db, js: mockJS}
+	server := httptest.NewServer(app.NewMux())
+	defer server.Close()
+	insertPlainEvent(t, app, "8")
+
+	patchPurchased(t, server, "8", `{"purchased":true}`)
+	if err := repository.UpdateInviteFailed(t.Context(), db, 8, "smtp down"); err != nil {
+		t.Fatalf("UpdateInviteFailed: %v", err)
+	}
+	patchPurchased(t, server, "8", `{"purchased":false}`)
+	patchPurchased(t, server, "8", `{"purchased":true}`)
+
+	if n := len(mockJS.publishedMessages); n != 2 {
+		t.Fatalf("published %d purchased messages, want 2", n)
+	}
+	status, errMsg := getInvite(t, server, "8")
+	if status == nil || *status != "pending" || errMsg != nil {
+		t.Fatalf("invite = (%v, %v), want (pending, null)", status, errMsg)
+	}
+}
+
+// Unticking never publishes.
+func TestSetNotPurchasedDoesNotPublish(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	mockJS := NewMockJetStream()
+	app := &App{db: db, js: mockJS}
+	server := httptest.NewServer(app.NewMux())
+	defer server.Close()
+	insertPlainEvent(t, app, "9")
+
+	patchPurchased(t, server, "9", `{"purchased":false}`)
+	patchPurchased(t, server, "9", `{"purchased":true}`)
+	patchPurchased(t, server, "9", `{"purchased":false}`)
+
+	if n := len(mockJS.publishedMessages); n != 1 {
+		t.Fatalf("published %d purchased messages, want 1", n)
+	}
+}

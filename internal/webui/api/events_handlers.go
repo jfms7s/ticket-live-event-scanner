@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -157,8 +158,8 @@ func (app *App) handleSetPurchased(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = repository.SetEventPurchased(r.Context(), app.db, id, body.Purchased)
-	if err == sql.ErrNoRows {
+	changed, err := repository.SetEventPurchased(r.Context(), app.db, id, body.Purchased)
+	if errors.Is(err, sql.ErrNoRows) {
 		http.Error(w, `{"error":"event not found"}`, http.StatusNotFound)
 		return
 	}
@@ -168,7 +169,10 @@ func (app *App) handleSetPurchased(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if body.Purchased {
+	// Only a real false-to-true change sends an invite: ticking an event
+	// that is already purchased (a double submit or a client retry) is a
+	// no-op. Unticking and ticking again is how a user re-sends one.
+	if body.Purchased && changed {
 		app.publishPurchased(r.Context(), id)
 	}
 

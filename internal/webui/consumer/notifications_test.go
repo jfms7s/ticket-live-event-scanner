@@ -93,7 +93,7 @@ func purchasedEvent(t *testing.T, db *sql.DB, id int64) {
 	if _, err := db.Exec(`INSERT INTO events (id, slug, title, url) VALUES (?, 's', 'T', 'http://example.com')`, id); err != nil {
 		t.Fatalf("insert event: %v", err)
 	}
-	if err := repository.SetEventPurchased(context.Background(), db, id, true); err != nil {
+	if _, err := repository.SetEventPurchased(context.Background(), db, id, true); err != nil {
 		t.Fatalf("SetEventPurchased: %v", err)
 	}
 }

@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 	"time"
 )
@@ -48,24 +49,69 @@ func TestSetEventPurchasedMarksInvitePending(t *testing.T) {
 	ctx := context.Background()
 	insertInviteTestEvent(t, db, 1)
 
-	if err := SetEventPurchased(ctx, db, 1, true); err != nil {
+	if _, err := SetEventPurchased(ctx, db, 1, true); err != nil {
 		t.Fatalf("SetEventPurchased: %v", err)
 	}
 	if status, _ := readInvite(t, db, 1); strOrNil(status) != "pending" {
 		t.Fatalf("invite_status = %s, want pending", strOrNil(status))
 	}
 
-	// A failed invite is reset to pending (with its error cleared) when the
-	// purchase is recorded again, since that publishes a new invite.
+	// Recording the purchase again while it is already recorded changes
+	// nothing: no new invite is published, so the invite state stays.
 	if err := UpdateInviteFailed(ctx, db, 1, "smtp down"); err != nil {
 		t.Fatalf("UpdateInviteFailed: %v", err)
 	}
-	if err := SetEventPurchased(ctx, db, 1, true); err != nil {
+	changed, err := SetEventPurchased(ctx, db, 1, true)
+	if err != nil {
 		t.Fatalf("SetEventPurchased again: %v", err)
+	}
+	if changed {
+		t.Errorf("SetEventPurchased(true) on a purchased event reported changed")
+	}
+	if status, _ := readInvite(t, db, 1); strOrNil(status) != "failed" {
+		t.Fatalf("invite_status = %s, want failed (unchanged)", strOrNil(status))
+	}
+
+	// A failed invite is reset to pending (with its error cleared) by a
+	// real re-purchase (untick, tick), since that publishes a new invite.
+	if _, err := SetEventPurchased(ctx, db, 1, false); err != nil {
+		t.Fatalf("SetEventPurchased(false): %v", err)
+	}
+	changed, err = SetEventPurchased(ctx, db, 1, true)
+	if err != nil || !changed {
+		t.Fatalf("SetEventPurchased re-purchase = (%v, %v), want (true, nil)", changed, err)
 	}
 	status, errMsg := readInvite(t, db, 1)
 	if strOrNil(status) != "pending" || errMsg != nil {
 		t.Fatalf("invite = (%s, %s), want (pending, <nil>)", strOrNil(status), strOrNil(errMsg))
+	}
+}
+
+func TestSetEventPurchasedReportsChange(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+	insertInviteTestEvent(t, db, 1)
+
+	for i, step := range []struct {
+		purchased, want bool
+	}{
+		{false, false}, // already not purchased
+		{true, true},
+		{true, false},
+		{false, true},
+		{false, false},
+	} {
+		changed, err := SetEventPurchased(ctx, db, 1, step.purchased)
+		if err != nil {
+			t.Fatalf("step %d: SetEventPurchased(%v): %v", i, step.purchased, err)
+		}
+		if changed != step.want {
+			t.Errorf("step %d: SetEventPurchased(%v) changed = %v, want %v", i, step.purchased, changed, step.want)
+		}
+	}
+
+	if _, err := SetEventPurchased(ctx, db, 404, true); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("SetEventPurchased(unknown) err = %v, want sql.ErrNoRows", err)
 	}
 }
 
@@ -74,13 +120,13 @@ func TestSetEventNotPurchasedKeepsInviteStatus(t *testing.T) {
 	ctx := context.Background()
 	insertInviteTestEvent(t, db, 1)
 
-	if err := SetEventPurchased(ctx, db, 1, true); err != nil {
+	if _, err := SetEventPurchased(ctx, db, 1, true); err != nil {
 		t.Fatalf("SetEventPurchased: %v", err)
 	}
 	if err := UpdateInviteSent(ctx, db, 1); err != nil {
 		t.Fatalf("UpdateInviteSent: %v", err)
 	}
-	if err := SetEventPurchased(ctx, db, 1, false); err != nil {
+	if _, err := SetEventPurchased(ctx, db, 1, false); err != nil {
 		t.Fatalf("SetEventPurchased(false): %v", err)
 	}
 	// The invite already went out; unticking doesn't unsend it.
@@ -93,7 +139,7 @@ func TestUpdateInviteSentFromPending(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
 	insertInviteTestEvent(t, db, 1)
-	if err := SetEventPurchased(ctx, db, 1, true); err != nil {
+	if _, err := SetEventPurchased(ctx, db, 1, true); err != nil {
 		t.Fatalf("SetEventPurchased: %v", err)
 	}
 
@@ -110,7 +156,7 @@ func TestUpdateInviteFailedFromPending(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
 	insertInviteTestEvent(t, db, 1)
-	if err := SetEventPurchased(ctx, db, 1, true); err != nil {
+	if _, err := SetEventPurchased(ctx, db, 1, true); err != nil {
 		t.Fatalf("SetEventPurchased: %v", err)
 	}
 
@@ -141,7 +187,7 @@ func TestInviteResultsOnlyResolvePending(t *testing.T) {
 	}
 
 	insertInviteTestEvent(t, db, 2)
-	if err := SetEventPurchased(ctx, db, 2, true); err != nil {
+	if _, err := SetEventPurchased(ctx, db, 2, true); err != nil {
 		t.Fatalf("SetEventPurchased: %v", err)
 	}
 	if err := UpdateInviteSent(ctx, db, 2); err != nil {
@@ -165,7 +211,7 @@ func TestListEventsIncludesInvite(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
 	insertInviteTestEvent(t, db, 1)
-	if err := SetEventPurchased(ctx, db, 1, true); err != nil {
+	if _, err := SetEventPurchased(ctx, db, 1, true); err != nil {
 		t.Fatalf("SetEventPurchased: %v", err)
 	}
 	if err := UpdateInviteFailed(ctx, db, 1, "boom"); err != nil {
