@@ -121,8 +121,19 @@ func (h *Handler) HandleMessage(ctx context.Context, msg jetstream.Msg) error {
 		return nil
 	}
 
+	// Space sends out so a burst stays under Telegram's rate limit. If
+	// shutdown interrupts the wait, hand the message back for redelivery.
+	if err := h.pace.wait(ctx); err != nil {
+		log.Printf("Shutting down before sending event %d; returning it for redelivery", discovered.EventID)
+		if err := msg.Nak(); err != nil {
+			log.Printf("Failed to nak message for event %d: %v", discovered.EventID, err)
+		}
+		return nil
+	}
+
 	// Try to send Telegram message
 	telegramMessageID, telegramErr := h.send(ctx, discovered)
+	h.pace.sent()
 
 	if telegramErr == nil {
 		// Success: IMMEDIATELY record in cache to protect against NATS publish failures
@@ -176,8 +187,9 @@ func (h *Handler) HandleMessage(ctx context.Context, msg jetstream.Msg) error {
 	action := policy.DecideAction(numDelivered, streams.EventsConsumerMaxDeliver)
 
 	if action == policy.ActionNak {
-		// Redelivery attempts remaining, nak with linear backoff
-		delay := policy.BackoffDelay(numDelivered)
+		// Redelivery attempts remaining: nak with linear backoff, or at
+		// least Telegram's retry_after for a rate limit
+		delay := retryDelay(telegramErr, numDelivered)
 		log.Printf("Failed to send notification for event %d (attempt %d/%d): %v. Retrying in %v",
 			discovered.EventID, numDelivered, streams.EventsConsumerMaxDeliver, telegramErr, delay)
 		if err := msg.NakWithDelay(delay); err != nil {

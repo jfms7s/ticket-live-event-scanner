@@ -32,6 +32,8 @@ type Handler struct {
 	// dedup is tracked in the project's issue notes.
 	mu           sync.RWMutex
 	recentlySent map[int64]*recentSend
+	// pace spaces sends out (nil: no pacing).
+	pace *pacer
 }
 
 type recentSend struct {
@@ -48,7 +50,14 @@ func New(botToken, chatID string, js jetstream.JetStream) *Handler {
 			return telegram.SendTelegramMessage(ctx, botToken, chatID, d)
 		},
 		recentlySent: make(map[int64]*recentSend),
+		pace:         newPacer(DefaultMinSendInterval),
 	}
+}
+
+// SetMinSendInterval sets the minimum time between two Telegram sends
+// (0 turns pacing off).
+func (h *Handler) SetMinSendInterval(d time.Duration) {
+	h.pace = newPacer(d)
 }
 
 // CleanupCache periodically removes stale entries from the cache to prevent memory leaks

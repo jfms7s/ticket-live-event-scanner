@@ -72,6 +72,8 @@ services:
       NATS_URL: nats://nats:4222
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?set TELEGRAM_BOT_TOKEN in .env}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:?set TELEGRAM_CHAT_ID in .env}
+      # Optional: minimum time between sends (Go duration, default 3s, 0 = off)
+      # TELEGRAM_MIN_SEND_INTERVAL: 3s
 
   email-notifier:
     build:

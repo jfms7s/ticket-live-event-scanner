@@ -64,8 +64,15 @@ func main() {
 		log.Fatalf("Failed to ensure consumer: %v", err)
 	}
 
+	minSendInterval, err := handler.ParseMinSendInterval(os.Getenv("TELEGRAM_MIN_SEND_INTERVAL"))
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	// Create handler
 	h := handler.New(telegramBotToken, telegramChatID, js)
+	h.SetMinSendInterval(minSendInterval)
+	log.Printf("Minimum interval between Telegram sends: %v", minSendInterval)
 
 	// Setup signal handling for graceful shutdown
 	sigChan := make(chan os.Signal, 1)
