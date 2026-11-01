@@ -74,8 +74,8 @@ func ConsumeNotifications(ctx context.Context, consumer jetstream.Consumer, db *
 
 // handleNotification applies one delivery result and acks, naks or
 // terminates msg: malformed bodies are terminated (they never parse on
-// retry), database errors are nak'd for redelivery, and a subject it has
-// no branch for is logged and acked.
+// retry), database errors are retried with backoff (retryOnDBError), and
+// a subject it has no branch for is logged and acked.
 func handleNotification(ctx context.Context, db *sql.DB, msg jetstream.Msg) {
 	subject := msg.Subject()
 
@@ -90,8 +90,7 @@ func handleNotification(ctx context.Context, db *sql.DB, msg jetstream.Msg) {
 				retryUntilMaterialized(msg, sent.EventID)
 				return
 			}
-			log.Printf("Failed to update notification sent for event %d: %v", sent.EventID, err)
-			msg.Nak()
+			retryOnDBError(msg, "update notification sent", sent.EventID, err)
 			return
 		}
 
@@ -105,8 +104,7 @@ func handleNotification(ctx context.Context, db *sql.DB, msg jetstream.Msg) {
 				retryUntilMaterialized(msg, failed.EventID)
 				return
 			}
-			log.Printf("Failed to update notification failed for event %d: %v", failed.EventID, err)
-			msg.Nak()
+			retryOnDBError(msg, "update notification failed", failed.EventID, err)
 			return
 		}
 
@@ -116,8 +114,7 @@ func handleNotification(ctx context.Context, db *sql.DB, msg jetstream.Msg) {
 			return
 		}
 		if err := repository.UpdateInviteSent(ctx, db, sent.EventID); err != nil {
-			log.Printf("Failed to update invite sent for event %d: %v", sent.EventID, err)
-			msg.Nak()
+			retryOnDBError(msg, "update invite sent", sent.EventID, err)
 			return
 		}
 
@@ -127,8 +124,7 @@ func handleNotification(ctx context.Context, db *sql.DB, msg jetstream.Msg) {
 			return
 		}
 		if err := repository.UpdateInviteFailed(ctx, db, failed.EventID, failed.Error); err != nil {
-			log.Printf("Failed to update invite failed for event %d: %v", failed.EventID, err)
-			msg.Nak()
+			retryOnDBError(msg, "update invite failed", failed.EventID, err)
 			return
 		}
 
@@ -136,7 +132,7 @@ func handleNotification(ctx context.Context, db *sql.DB, msg jetstream.Msg) {
 		log.Printf("WARN unhandled subject %s", subject)
 	}
 
-	msg.Ack()
+	ack(msg)
 }
 
 // retryUntilMaterialized redelivers a Telegram result whose event the
@@ -154,7 +150,9 @@ func retryUntilMaterialized(msg jetstream.Msg, eventID int64) {
 	} else {
 		log.Printf("Event %d not materialized yet; retrying its Telegram result (delivery %d)", eventID, delivered)
 	}
-	msg.NakWithDelay(materializeRetryDelay(delivered))
+	if err := msg.NakWithDelay(materializeRetryDelay(delivered)); err != nil {
+		log.Printf("Error nak'ing Telegram result for event %d: %v", eventID, err)
+	}
 }
 
 // materializeRetryDelay is 15s × 2^(delivered-1), capped at 5 minutes.
@@ -172,7 +170,9 @@ func materializeRetryDelay(delivered uint64) time.Duration {
 func decode(msg jetstream.Msg, v any, name string) bool {
 	if err := json.Unmarshal(msg.Data(), v); err != nil {
 		log.Printf("Failed to unmarshal %s message: %v", name, err)
-		msg.Term()
+		if err := msg.Term(); err != nil {
+			log.Printf("Error terminating malformed %s message: %v", name, err)
+		}
 		return false
 	}
 	return true
