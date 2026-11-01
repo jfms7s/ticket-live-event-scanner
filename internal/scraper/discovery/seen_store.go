@@ -21,6 +21,18 @@ func (s *Scraper) LoadKnownIDs(ctx context.Context) error {
 	}
 	s.knownIDs = ids
 	log.Printf("Loaded %d known event IDs", len(s.knownIDs))
+
+	// The skipped set only saves requests, so a bucket that can't be read
+	// means re-fetching those sessions, not failing the run.
+	skipped, err := s.skipped.Load(ctx)
+	if err != nil {
+		log.Printf("WARN %v; rejected sessions will be fetched again", err)
+		skipped = map[int64]bool{}
+	}
+	s.skipIDs = skipped
+	if len(skipped) > 0 {
+		log.Printf("Loaded %d recently rejected event IDs", len(skipped))
+	}
 	return nil
 }
 
@@ -61,9 +73,18 @@ func (b bucketSeenStore) Load(ctx context.Context) (map[int64]bool, error) {
 }
 
 func (b bucketSeenStore) loadBucket(ctx context.Context) (map[int64]bool, error) {
-	lister, err := b.kv.ListKeys(ctx)
+	ids, err := listIDs(ctx, b.kv)
 	if err != nil {
-		return nil, fmt.Errorf("list seen bucket: %w", err)
+		return nil, fmt.Errorf("seen bucket: %w", err)
+	}
+	return ids, nil
+}
+
+// listIDs reads every key of a bucket keyed by event ID.
+func listIDs(ctx context.Context, kv seenKV) (map[int64]bool, error) {
+	lister, err := kv.ListKeys(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list keys: %w", err)
 	}
 	defer lister.Stop()
 
@@ -71,7 +92,7 @@ func (b bucketSeenStore) loadBucket(ctx context.Context) (map[int64]bool, error)
 	for key := range lister.Keys() {
 		id, err := strconv.ParseInt(key, 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("seen bucket key %q is not an event ID", key)
+			return nil, fmt.Errorf("key %q is not an event ID", key)
 		}
 		ids[id] = true
 	}
@@ -79,7 +100,7 @@ func (b bucketSeenStore) loadBucket(ctx context.Context) (map[int64]bool, error)
 	// short list here may be a cut-off one. Treating it as complete would
 	// publish the missing events again.
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("list seen bucket: %w", err)
+		return nil, fmt.Errorf("list keys: %w", err)
 	}
 	return ids, nil
 }

@@ -60,8 +60,15 @@ func run(ctx context.Context, cfg config.Config) error {
 		return fmt.Errorf("ensure seen bucket: %w", err)
 	}
 
+	// Sessions the parser rejected recently (see
+	// streams.SkippedBucketName).
+	skipped, err := streams.EnsureSkippedBucket(ctx, js)
+	if err != nil {
+		return fmt.Errorf("ensure skipped bucket: %w", err)
+	}
+
 	// Create scraper instance
-	scraper := discovery.New(cfg, db, js, seen)
+	scraper := discovery.New(cfg, db, js, seen, skipped)
 
 	// Load seen event IDs (seen bucket plus the events table)
 	if err := scraper.LoadKnownIDs(ctx); err != nil {
@@ -75,9 +82,10 @@ func run(ctx context.Context, cfg config.Config) error {
 	}
 
 	// Log summary
-	log.Printf("Scraper finished: found=%d published=%d errors=%d",
+	log.Printf("Scraper finished: found=%d published=%d skipped=%d errors=%d",
 		scraper.Stats.EventsFound,
 		scraper.Stats.EventsPublished,
+		scraper.Stats.Skipped,
 		scraper.Stats.Errors)
 
 	return nil

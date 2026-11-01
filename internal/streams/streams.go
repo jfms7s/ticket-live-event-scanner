@@ -162,3 +162,34 @@ func EnsureSeenBucket(ctx context.Context, js jetstream.JetStream) (jetstream.Ke
 	}
 	return kv, nil
 }
+
+// SkippedBucketName is the JetStream KV bucket where the scraper records
+// sessions whose detail page it rejected (bad date, missing title, URL or
+// slug), so the hourly run doesn't fetch them again. Only the scraper
+// reads or writes it.
+const SkippedBucketName = "SCRAPER_SKIPPED_EVENTS"
+
+// skippedTTL is how long a rejected session is left alone: it is fetched
+// and parsed again about once a day, in case the page was fixed.
+const skippedTTL = 24 * time.Hour
+
+// SkippedBucketConfig is the skipped bucket's config. Unlike the seen
+// bucket its keys expire, which is what retries a rejected session.
+func SkippedBucketConfig() jetstream.KeyValueConfig {
+	return jetstream.KeyValueConfig{
+		Bucket:      SkippedBucketName,
+		Description: "Event IDs whose detail page the scraper rejected (key: event ID, value: reason)",
+		History:     1,
+		TTL:         skippedTTL,
+		Storage:     jetstream.FileStorage,
+	}
+}
+
+// EnsureSkippedBucket creates or updates the skipped bucket and returns it.
+func EnsureSkippedBucket(ctx context.Context, js jetstream.JetStream) (jetstream.KeyValue, error) {
+	kv, err := js.CreateOrUpdateKeyValue(ctx, SkippedBucketConfig())
+	if err != nil {
+		return nil, fmt.Errorf("ensure %s bucket: %w", SkippedBucketName, err)
+	}
+	return kv, nil
+}

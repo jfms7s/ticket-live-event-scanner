@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -27,10 +28,8 @@ func (s *Scraper) fetchAndPublishEvent(ctx context.Context, basicEvent event.Dis
 	// Parse detail page
 	detailEvent, err := parse.ParseEventDetail(body, basicEvent.EventID)
 	if err != nil {
-		// Log and skip events with invalid dates; return other errors
-		if strings.Contains(err.Error(), "invalid event date") {
-			log.Printf("Skipping event %d: %v", basicEvent.EventID, err)
-			return nil
+		if errors.Is(err, parse.ErrInvalidEventDate) {
+			return fmt.Errorf("%w: %w", errSkip, err)
 		}
 		return err
 	}
@@ -62,13 +61,13 @@ func (s *Scraper) fetchAndPublishEvent(ctx context.Context, basicEvent event.Dis
 
 	// Validate required fields
 	if detailEvent.Title == "" {
-		return fmt.Errorf("event %d missing required field: title", basicEvent.EventID)
+		return fmt.Errorf("%w: event %d missing required field: title", errSkip, basicEvent.EventID)
 	}
 	if detailEvent.URL == "" {
-		return fmt.Errorf("event %d missing required field: url", basicEvent.EventID)
+		return fmt.Errorf("%w: event %d missing required field: url", errSkip, basicEvent.EventID)
 	}
 	if detailEvent.Slug == "" {
-		return fmt.Errorf("event %d missing required field: slug", basicEvent.EventID)
+		return fmt.Errorf("%w: event %d missing required field: slug", errSkip, basicEvent.EventID)
 	}
 
 	// Publish to NATS

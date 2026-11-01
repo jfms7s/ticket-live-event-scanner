@@ -1,6 +1,7 @@
 package parse
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -17,6 +18,10 @@ var eventDateLayouts = []string{"2006-01-02", "2006-01-02T15:04"}
 
 // validateEventDate checks if the date string matches one of eventDateLayouts.
 // If the date is empty, it is considered valid (optional field).
+// ErrInvalidEventDate is wrapped by ParseEventDetail when the page's start
+// date matches no known layout.
+var ErrInvalidEventDate = errors.New("invalid event date")
+
 func validateEventDate(dateStr string) error {
 	if dateStr == "" {
 		// Empty date is acceptable (optional field)
@@ -59,7 +64,7 @@ func ParseEventDetail(body string, eventID int64) (*event.Discovered, error) {
 
 	// Validate event date format
 	if err := validateEventDate(evt.EventDate); err != nil {
-		return nil, fmt.Errorf("event %d: invalid event date: %w", eventID, err)
+		return nil, fmt.Errorf("event %d: %w: %w", eventID, ErrInvalidEventDate, err)
 	}
 
 	// Extract URL and slug
