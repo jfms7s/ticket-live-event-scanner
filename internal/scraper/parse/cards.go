@@ -8,8 +8,13 @@ import (
 	"golang.org/x/net/html"
 )
 
-// ParseSearchPage extracts event cards from a search/agenda/hub page.
-func ParseSearchPage(body string) ([]event.Discovered, error) {
+// similarEventsClass marks ticketline.pt's "similar events" widget on hub
+// pages. Its cards are other shows, not sessions of this hub.
+const similarEventsClass = "similar_events"
+
+// ParseHubSessions extracts the session cards from a venue/series hub page,
+// skipping everything inside the similar-events widget.
+func ParseHubSessions(body string) ([]event.Discovered, error) {
 	doc, err := html.Parse(strings.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("parse HTML: %w", err)
@@ -20,8 +25,13 @@ func ParseSearchPage(body string) ([]event.Discovered, error) {
 	return events, nil
 }
 
-// findEventCards recursively finds all Event microdata items in the document.
+// findEventCards recursively finds all Event microdata items in the
+// document, without descending into the similar-events widget (matched by
+// whole class token).
 func findEventCards(n *html.Node, events *[]event.Discovered) {
+	if n.Type == html.ElementNode && hasClass(n, similarEventsClass) {
+		return
+	}
 	if n.Type == html.ElementNode && n.Data == "li" {
 		// Check if this is an event card
 		if isEventCard(n) {
