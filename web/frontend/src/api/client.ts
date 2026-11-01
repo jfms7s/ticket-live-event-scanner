@@ -1,9 +1,16 @@
 import type { Event, EventStatusFilter } from '../types';
 
-class ApiError extends Error {}
+export class ApiError extends Error {}
 
+// config.js (served by server.js) sets API_BASE_URL before the app loads. If
+// it didn't load, fail with a clear message instead of fetching
+// "undefined/api/…" and showing a generic network error.
 function baseUrl(): string {
-  return window.API_BASE_URL;
+  const url = window.API_BASE_URL;
+  if (!url) {
+    throw new ApiError('Configuration error: API_BASE_URL is not set (config.js missing?)');
+  }
+  return url.endsWith('/') ? url.slice(0, -1) : url;
 }
 
 export async function fetchEvents(status: EventStatusFilter): Promise<Event[]> {
