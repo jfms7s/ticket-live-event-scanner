@@ -6,12 +6,18 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/jfms7s/ticket-live-event-scanner/internal/notifier/handler"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/shutdown"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/streams"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
+
+// drainTimeout bounds how long shutdown waits for the message in progress,
+// under Kubernetes' default 30 s termination grace period.
+const drainTimeout = 25 * time.Second
 
 func main() {
 	// Load environment variables
@@ -82,18 +88,27 @@ func main() {
 }
 
 func consumeMessages(ctx context.Context, consumer jetstream.Consumer, h *handler.Handler) {
-	// Use Consume with a callback handler
+	// Messages in hand run on workCtx, not ctx: a shutdown stops new
+	// deliveries but lets a send in progress finish and be acked, so it
+	// isn't redelivered (and sent twice) after the restart.
+	workCtx, workCancel := context.WithCancel(context.Background())
+	defer workCancel()
+
 	// Consume() is non-blocking; it registers the callback and returns immediately
 	consumeCtx, err := consumer.Consume(
 		func(msg jetstream.Msg) {
 			// Process the message in the callback
-			if err := h.HandleMessage(ctx, msg); err != nil {
+			if err := h.HandleMessage(workCtx, msg); err != nil {
 				log.Printf("Error handling message: %v", err)
 			}
 		},
 		jetstream.ConsumeErrHandler(func(consumeCtx jetstream.ConsumeContext, err error) {
 			log.Printf("Consume error: %v", err)
 		}),
+		// Messages are handled one at a time, so buffer one: on shutdown
+		// Drain() then finishes the message in hand (and at most one
+		// more) instead of working through a prefetched backlog.
+		jetstream.PullMaxMessages(1),
 	)
 
 	if err != nil {
@@ -103,7 +118,17 @@ func consumeMessages(ctx context.Context, consumer jetstream.Consumer, h *handle
 	// Wait for context cancellation
 	<-ctx.Done()
 
-	// Stop message delivery cleanly before closing the connection
-	// This ensures in-flight callbacks complete and acks are sent
-	consumeCtx.Stop()
+	// Stop pulling and wait for the callback in progress to finish and ack
+	// (Stop alone doesn't wait). Stay inside Kubernetes' 30 s grace period;
+	// past the bound, cancel the send and let JetStream redeliver it.
+	consumeCtx.Drain()
+	if shutdown.WaitOrTimeout(consumeCtx.Closed(), drainTimeout) {
+		log.Println("Consumer drained")
+		return
+	}
+	log.Printf("Consumer still busy after %v; cancelling the message in progress", drainTimeout)
+	workCancel()
+	if !shutdown.WaitOrTimeout(consumeCtx.Closed(), 2*time.Second) {
+		log.Println("Consumer did not stop; closing the connection anyway")
+	}
 }

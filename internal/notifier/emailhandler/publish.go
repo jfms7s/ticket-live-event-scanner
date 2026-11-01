@@ -24,7 +24,9 @@ func (h *Handler) publishEmailSent(ctx context.Context, eventID int64, messageID
 	}
 
 	msgID := fmt.Sprintf("email-sent-%d-%d", eventID, natsSeq)
-	_, err = h.js.Publish(ctx, streams.NotificationsEmailSentSubject, data, jetstream.WithMsgID(msgID))
+	pubCtx, cancel := resultCtx(ctx)
+	defer cancel()
+	_, err = h.js.Publish(pubCtx, streams.NotificationsEmailSentSubject, data, jetstream.WithMsgID(msgID))
 	if err != nil {
 		return fmt.Errorf("publish notifications.email.sent: %w", err)
 	}
@@ -46,7 +48,9 @@ func (h *Handler) publishEmailFailed(ctx context.Context, eventID int64, errMsg 
 	}
 
 	msgID := fmt.Sprintf("email-failed-%d-%d", eventID, natsSeq)
-	_, err = h.js.Publish(ctx, streams.NotificationsEmailFailSubject, data, jetstream.WithMsgID(msgID))
+	pubCtx, cancel := resultCtx(ctx)
+	defer cancel()
+	_, err = h.js.Publish(pubCtx, streams.NotificationsEmailFailSubject, data, jetstream.WithMsgID(msgID))
 	if err != nil {
 		return fmt.Errorf("publish notifications.email.failed: %w", err)
 	}
@@ -58,3 +62,14 @@ func (h *Handler) publishEmailFailed(ctx context.Context, eventID int64, errMsg 
 func now() time.Time {
 	return time.Now().UTC()
 }
+
+// resultCtx is the context for publishing a delivery result. The result
+// must go out even when shutdown has just cancelled the send (the send may
+// already have happened), so it ignores ctx's cancellation and has its own
+// short bound instead.
+func resultCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), resultPublishTimeout)
+}
+
+// resultPublishTimeout bounds one delivery-result publish.
+const resultPublishTimeout = 2 * time.Second
