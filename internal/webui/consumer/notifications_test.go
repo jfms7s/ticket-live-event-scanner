@@ -28,22 +28,32 @@ import (
 type fakeMsg struct {
 	subject string
 	data    []byte
+	meta    *jetstream.MsgMetadata // nil: empty metadata
+	metaErr error
 
 	acks, naks, terms int
 }
 
-func (m *fakeMsg) Metadata() (*jetstream.MsgMetadata, error) { return &jetstream.MsgMetadata{}, nil }
-func (m *fakeMsg) Data() []byte                              { return m.data }
-func (m *fakeMsg) Headers() nats.Header                      { return nil }
-func (m *fakeMsg) Subject() string                           { return m.subject }
-func (m *fakeMsg) Reply() string                             { return "" }
-func (m *fakeMsg) Ack() error                                { m.acks++; return nil }
-func (m *fakeMsg) DoubleAck(context.Context) error           { m.acks++; return nil }
-func (m *fakeMsg) Nak() error                                { m.naks++; return nil }
-func (m *fakeMsg) NakWithDelay(time.Duration) error          { m.naks++; return nil }
-func (m *fakeMsg) InProgress() error                         { return nil }
-func (m *fakeMsg) Term() error                               { m.terms++; return nil }
-func (m *fakeMsg) TermWithReason(string) error               { m.terms++; return nil }
+func (m *fakeMsg) Metadata() (*jetstream.MsgMetadata, error) {
+	if m.metaErr != nil {
+		return nil, m.metaErr
+	}
+	if m.meta != nil {
+		return m.meta, nil
+	}
+	return &jetstream.MsgMetadata{}, nil
+}
+func (m *fakeMsg) Data() []byte                     { return m.data }
+func (m *fakeMsg) Headers() nats.Header             { return nil }
+func (m *fakeMsg) Subject() string                  { return m.subject }
+func (m *fakeMsg) Reply() string                    { return "" }
+func (m *fakeMsg) Ack() error                       { m.acks++; return nil }
+func (m *fakeMsg) DoubleAck(context.Context) error  { m.acks++; return nil }
+func (m *fakeMsg) Nak() error                       { m.naks++; return nil }
+func (m *fakeMsg) NakWithDelay(time.Duration) error { m.naks++; return nil }
+func (m *fakeMsg) InProgress() error                { return nil }
+func (m *fakeMsg) Term() error                      { m.terms++; return nil }
+func (m *fakeMsg) TermWithReason(string) error      { m.terms++; return nil }
 
 func (m *fakeMsg) assertCalls(t *testing.T, acks, naks, terms int) {
 	t.Helper()
@@ -174,7 +184,7 @@ func TestTelegramResultsStillHandled(t *testing.T) {
 	ctx := context.Background()
 	if err := repository.UpsertEventAndInsertNotification(ctx, db, &event.Discovered{
 		EventID: 1, Slug: "s", Title: "T", URL: "http://example.com", Reason: event.ReasonDiscovered,
-	}); err != nil {
+	}, 0); err != nil {
 		t.Fatalf("UpsertEventAndInsertNotification: %v", err)
 	}
 

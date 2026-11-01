@@ -60,9 +60,10 @@ func (m *fakeMsg) TermWithReason(r string) error {
 // (they mutate an unexported struct), so the message ID can't be read back;
 // the call records the option count and the decoded event_id instead.
 type pubCall struct {
-	subject string
-	eventID int64
-	nOpts   int
+	subject     string
+	eventID     int64
+	deliverySeq uint64
+	nOpts       int
 }
 
 // fakePublisher records publishes and fails those whose subject is in fail.
@@ -73,10 +74,11 @@ type fakePublisher struct {
 
 func (p *fakePublisher) Publish(_ context.Context, subject string, data []byte, opts ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
 	var body struct {
-		EventID int64 `json:"event_id"`
+		EventID     int64  `json:"event_id"`
+		DeliverySeq uint64 `json:"delivery_seq"`
 	}
 	_ = json.Unmarshal(data, &body)
-	p.calls = append(p.calls, pubCall{subject: subject, eventID: body.EventID, nOpts: len(opts)})
+	p.calls = append(p.calls, pubCall{subject: subject, eventID: body.EventID, deliverySeq: body.DeliverySeq, nOpts: len(opts)})
 	if p.fail[subject] {
 		return nil, fmt.Errorf("publish to %s failed", subject)
 	}
@@ -168,6 +170,8 @@ type outcome struct {
 	terms     int
 	publishes []string
 	sends     int
+	// deliverySeq is the delivery_seq every published result must carry.
+	deliverySeq uint64
 }
 
 func checkOutcome(t *testing.T, m *fakeMsg, pub *fakePublisher, s *fakeSender, want outcome) {
@@ -190,6 +194,9 @@ func checkOutcome(t *testing.T, m *fakeMsg, pub *fakePublisher, s *fakeSender, w
 	for _, c := range pub.calls {
 		if c.eventID != testEventID {
 			t.Errorf("published event_id = %d on %s, want %d", c.eventID, c.subject, testEventID)
+		}
+		if c.deliverySeq != want.deliverySeq {
+			t.Errorf("published delivery_seq = %d on %s, want %d", c.deliverySeq, c.subject, want.deliverySeq)
 		}
 		if c.nOpts != 1 {
 			t.Errorf("publish on %s passed %d options, want 1 (WithMsgID)", c.subject, c.nOpts)
@@ -216,12 +223,12 @@ func TestHandleMessage(t *testing.T) {
 			name:   "success acks and publishes sent",
 			msg:    func(t *testing.T) *fakeMsg { return newMsg(t, 1, 10) },
 			sendOK: true,
-			want:   outcome{acks: 1, publishes: []string{streams.NotificationsSentSubject}, sends: 1},
+			want:   outcome{acks: 1, publishes: []string{streams.NotificationsSentSubject}, sends: 1, deliverySeq: 10},
 		},
 		{
 			name: "send fails on final delivery publishes failed and terms",
 			msg:  func(t *testing.T) *fakeMsg { return newMsg(t, uint64(streams.EventsConsumerMaxDeliver), 10) },
-			want: outcome{terms: 1, publishes: []string{streams.NotificationsFailSubject}, sends: 1},
+			want: outcome{terms: 1, publishes: []string{streams.NotificationsFailSubject}, sends: 1, deliverySeq: 10},
 		},
 		{
 			name: "malformed JSON acks without sending",
@@ -250,7 +257,7 @@ func TestHandleMessage(t *testing.T) {
 				m.headers = nats.Header{"Nats-Num-Delivered": []string{strconv.Itoa(streams.EventsConsumerMaxDeliver)}}
 				return m
 			},
-			want: outcome{terms: 1, publishes: []string{streams.NotificationsFailSubject}},
+			want: outcome{terms: 1, publishes: []string{streams.NotificationsFailSubject}, deliverySeq: 0}, // stream sequence unknown
 		},
 		{
 			name: "metadata error without header assumes first delivery",
@@ -315,7 +322,7 @@ func TestHandleMessage_RedeliveryAfterSentPublishFails(t *testing.T) {
 	if err := h.HandleMessage(context.Background(), first); err != nil {
 		t.Fatalf("first delivery: %v", err)
 	}
-	checkOutcome(t, first, pub, s, outcome{
+	checkOutcome(t, first, pub, s, outcome{deliverySeq: 10,
 		nakDelays: []time.Duration{10 * time.Second},
 		publishes: []string{streams.NotificationsSentSubject},
 		sends:     1,
@@ -327,7 +334,7 @@ func TestHandleMessage_RedeliveryAfterSentPublishFails(t *testing.T) {
 	if err := h.HandleMessage(context.Background(), redelivery); err != nil {
 		t.Fatalf("redelivery: %v", err)
 	}
-	checkOutcome(t, redelivery, pub, s, outcome{
+	checkOutcome(t, redelivery, pub, s, outcome{deliverySeq: 10,
 		acks:      1,
 		publishes: []string{streams.NotificationsSentSubject},
 		sends:     1, // still the one send from the first delivery
@@ -372,7 +379,7 @@ func TestHandleMessage_StaleCacheEntrySendsAgain(t *testing.T) {
 	if err := h.HandleMessage(context.Background(), m); err != nil {
 		t.Fatal(err)
 	}
-	checkOutcome(t, m, pub, s, outcome{acks: 1, publishes: []string{streams.NotificationsSentSubject}, sends: 1})
+	checkOutcome(t, m, pub, s, outcome{deliverySeq: 10, acks: 1, publishes: []string{streams.NotificationsSentSubject}, sends: 1})
 }
 
 // TestHandleMessage_CachedRepublishFails covers a redelivery that hits the
@@ -383,8 +390,8 @@ func TestHandleMessage_CachedRepublishFails(t *testing.T) {
 		delivered uint64
 		want      outcome
 	}{
-		{3, outcome{nakDelays: []time.Duration{15 * time.Second}, publishes: []string{streams.NotificationsSentSubject}}},
-		{uint64(streams.EventsConsumerMaxDeliver), outcome{terms: 1, publishes: []string{streams.NotificationsSentSubject, streams.NotificationsFailSubject}}},
+		{3, outcome{deliverySeq: 10, nakDelays: []time.Duration{15 * time.Second}, publishes: []string{streams.NotificationsSentSubject}}},
+		{uint64(streams.EventsConsumerMaxDeliver), outcome{deliverySeq: 10, terms: 1, publishes: []string{streams.NotificationsSentSubject, streams.NotificationsFailSubject}}},
 	} {
 		t.Run(fmt.Sprintf("delivery_%d", c.delivered), func(t *testing.T) {
 			pub := &fakePublisher{fail: map[string]bool{streams.NotificationsSentSubject: true}}
@@ -431,7 +438,7 @@ func TestHandleMessage_SentPublishFailsOnFinalAttempt_PublishesFailed(t *testing
 	if err := h.HandleMessage(context.Background(), m); err != nil {
 		t.Fatal(err)
 	}
-	checkOutcome(t, m, pub, s, outcome{
+	checkOutcome(t, m, pub, s, outcome{deliverySeq: 10,
 		terms:     1,
 		publishes: []string{streams.NotificationsSentSubject, streams.NotificationsFailSubject},
 		sends:     1,

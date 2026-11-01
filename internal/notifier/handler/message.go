@@ -51,9 +51,11 @@ func (h *Handler) HandleMessage(ctx context.Context, msg jetstream.Msg) error {
 		// Check if we've hit the delivery limit
 		if numDelivered >= streams.EventsConsumerMaxDeliver {
 			// Final attempt: publish notification.failed and term
-			// Use event ID as fallback sequence when metadata is unavailable
+			// The stream sequence is unknown without metadata: send 0, so the
+			// result carries no delivery_seq and web-ui-api falls back to the
+			// event's latest pending row.
 			log.Printf("Event %d reached max delivery attempts (%d) with metadata failure", discovered.EventID, numDelivered)
-			if err := h.publishNotificationFailed(ctx, discovered.EventID, fmt.Sprintf("metadata error: %v", err), numDelivered, uint64(discovered.EventID)); err != nil {
+			if err := h.publishNotificationFailed(ctx, discovered.EventID, fmt.Sprintf("metadata error: %v", err), numDelivered, 0); err != nil {
 				log.Printf("Failed to publish notification.failed for event %d: %v", discovered.EventID, err)
 			}
 			if err := msg.Term(); err != nil {

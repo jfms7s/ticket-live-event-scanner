@@ -11,11 +11,17 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
+// publishNotificationSent and publishNotificationFailed take natsSeq, the
+// EVENTS stream sequence of the events.discovered message being handled, or
+// 0 when it is unknown. It goes out as the result's DeliverySeq (0 is
+// omitted, so web-ui-api falls back to the latest pending row) and is part
+// of the publish message ID.
 func (h *Handler) publishNotificationSent(ctx context.Context, eventID int64, messageID string, natsSeq uint64) error {
 	sent := event.NotificationSent{
 		EventID:           eventID,
 		TelegramMessageID: messageID,
 		SentAt:            now(),
+		DeliverySeq:       natsSeq,
 	}
 
 	data, err := json.Marshal(sent)
@@ -38,6 +44,8 @@ func (h *Handler) publishNotificationFailed(ctx context.Context, eventID int64, 
 		Error:    errMsg,
 		FailedAt: now(),
 		Attempts: attempts,
+		// DeliverySeq: as on NotificationSent.
+		DeliverySeq: natsSeq,
 	}
 
 	data, err := json.Marshal(failed)

@@ -75,13 +75,13 @@ func TestRediscoveredHiddenEventStaysHidden(t *testing.T) {
 	ctx := context.Background()
 
 	disc := &event.Discovered{EventID: 7, Slug: "s-7", Title: "Seven", URL: "https://x/7", Reason: event.ReasonDiscovered}
-	if err := UpsertEventAndInsertNotification(ctx, db, disc); err != nil {
+	if err := UpsertEventAndInsertNotification(ctx, db, disc, 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := HideEvent(ctx, db, 7); err != nil {
 		t.Fatal(err)
 	}
-	if err := UpsertEventAndInsertNotification(ctx, db, disc); err != nil {
+	if err := UpsertEventAndInsertNotification(ctx, db, disc, 0); err != nil {
 		t.Fatal(err)
 	}
 
