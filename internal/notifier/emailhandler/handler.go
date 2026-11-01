@@ -20,6 +20,9 @@ type Handler struct {
 	js   jetstream.JetStream
 	// recentlySent tracks recently sent emails by event_id to prevent
 	// duplicates if NATS publish fails and the message is redelivered.
+	// The cache is in memory only: a crash between a successful send and the
+	// ack re-sends after restart. That is an accepted trade-off; persistent
+	// dedup is tracked in the project's issue notes.
 	mu           sync.RWMutex
 	recentlySent map[int64]*recentSend
 }

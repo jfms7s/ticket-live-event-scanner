@@ -8,7 +8,7 @@
 //  3. Serve an HTTP API for the web-ui-frontend to query events and notifications,
 //     and to trigger retries.
 //
-// See docs/design.md §6.4 and §8.1 for the full spec.
+// See the project design doc (kept outside this repo), §6.4 and §8.1, for the full spec.
 package main
 
 import (
