@@ -32,7 +32,7 @@ type Fetcher struct {
 	client     *http.Client
 	userAgent  string
 	cache      map[string]*cacheEntry
-	cacheOrder []string // insertion order, for LRU eviction
+	cacheOrder []string // insertion order, for FIFO eviction
 }
 
 // New constructs a Fetcher that sends the given User-Agent and times out

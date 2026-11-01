@@ -1,9 +1,9 @@
 # Local development stack. Mirrors deploy/k8s but swaps Turso for a local
 # libsql-server (sqld) container so the stack runs with no external cloud
-# dependencies besides Telegram.
+# dependencies besides Telegram and the SMTP relay.
 #
 # Usage:
-#   cp .env.example .env   # fill in TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID
+#   cp .env.example .env   # fill in the Telegram and SMTP variables (see .env.example)
 #   docker compose up --build
 #   docker compose run --rm scraper   # scraper is a CronJob in k8s; run on demand here
 

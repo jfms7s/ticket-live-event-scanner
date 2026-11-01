@@ -43,7 +43,7 @@ func (s *Scraper) fetchAndPublishEvent(ctx context.Context, basicEvent event.Dis
 		detailEvent.URL = s.baseURL + detailEvent.URL
 	}
 
-	// Detail pages don't self-link via itemprop="url", so parseEventDetail
+	// Detail pages don't self-link via itemprop="url", so parse.ParseEventDetail
 	// can't derive a slug from the page body — fall back to the slug we
 	// already know from the hub/search card that pointed us here.
 	if detailEvent.Slug == "" {
@@ -51,7 +51,7 @@ func (s *Scraper) fetchAndPublishEvent(ctx context.Context, basicEvent event.Dis
 	}
 
 	// Belt-and-braces: if some detail page variant lacks both the
-	// microdata image and the header thumb anchor parseEventDetail looks
+	// microdata image and the header thumb anchor parse.ParseEventDetail looks
 	// for, fall back to the poster already seen on the hub/search card.
 	if detailEvent.ImageURL == "" {
 		detailEvent.ImageURL = basicEvent.ImageURL
@@ -85,7 +85,7 @@ func (s *Scraper) fetchAndPublishEvent(ctx context.Context, basicEvent event.Dis
 
 	// Mark as known immediately so this run doesn't re-fetch/re-publish it
 	// if the same event ID turns up again later in this same discovery pass
-	// (e.g. the same hub session appearing across multiple month searches).
+	// (the same session can be listed on two tracked hub pages in one run).
 	s.knownIDs[basicEvent.EventID] = true
 
 	if ack != nil && ack.Duplicate {

@@ -24,7 +24,7 @@ import (
 // deliverySeq 0 means the sequence is unknown (no message metadata). Then
 // the pre-delivery_seq rule applies: a ReasonDiscovered message is skipped
 // when the event already has a pending row, and a manual retry always gets
-// a new row (design.md §6.4).
+// a new row (the project design doc (kept outside this repo), §6.4).
 func UpsertEventAndInsertNotification(ctx context.Context, db *sql.DB, disc *event.Discovered, deliverySeq uint64) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {

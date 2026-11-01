@@ -1,6 +1,7 @@
 // Package streams centralizes NATS JetStream stream/subject/consumer
 // names and provides idempotent setup so every service (and local dev
-// tooling) agrees on the same topology described in docs/design.md §6.2.
+// tooling) agrees on the same topology described in
+// the project design doc (kept outside this repo), §6.2.
 package streams
 
 import (
@@ -92,7 +93,8 @@ func EnsureStreams(ctx context.Context, js jetstream.JetStream) error {
 
 // EnsureEventsConsumer creates or updates the durable consumer used by
 // telegram-notifier to read events.discovered, with the redelivery policy
-// from docs/design.md §6.2/§6.3.
+// from
+// the project design doc (kept outside this repo), §6.2/§6.3.
 func EnsureEventsConsumer(ctx context.Context, js jetstream.JetStream) (jetstream.Consumer, error) {
 	stream, err := js.Stream(ctx, EventsStreamName)
 	if err != nil {

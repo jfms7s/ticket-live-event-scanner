@@ -45,7 +45,7 @@ func (s *Scraper) Discover(ctx context.Context) error {
 	return nil
 }
 
-// fetchHubPage fetches a venue/series hub page (design.md §4/§6.1 — the two
+// fetchHubPage fetches a venue/series hub page (the project design doc (kept outside this repo), §4/§6.1 — the two
 // example URLs are hub pages, not single events) and discovers new session
 // links on it using the same schema.org/Event card parsing as search pages.
 func (s *Scraper) fetchHubPage(ctx context.Context, hubSlug string, hubID int64) error {

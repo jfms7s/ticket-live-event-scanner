@@ -1,7 +1,15 @@
 // Package event defines the shared message schemas published to and
-// consumed from NATS JetStream, per docs/design.md §8. All three services
-// (scraper, telegram-notifier, web-ui-api) import this package so the wire
-// format stays in sync without needing to hand-copy struct definitions.
+// consumed from NATS JetStream, per the project design doc (kept outside this repo), §8.
+// All four Go services import this package so the wire format stays in sync
+// without hand-copied struct definitions:
+//   - scraper publishes events.discovered.
+//   - telegram-notifier consumes events.discovered and publishes
+//     notifications.sent / notifications.failed.
+//   - email-notifier consumes events.purchased and publishes
+//     notifications.email.sent / notifications.email.failed.
+//   - web-ui-api consumes events.discovered and every notifications.*
+//     subject, and publishes events.discovered (manual retrigger) and
+//     events.purchased.
 package event
 
 import "time"

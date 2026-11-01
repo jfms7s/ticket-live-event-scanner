@@ -1,6 +1,7 @@
 // Package store holds the Turso/libSQL connection helper and schema
 // shared by every service that talks to the database (web-ui-api writes
-// it, scraper reads known event IDs from it), per docs/design.md §7.
+// it, scraper reads known event IDs from it), per
+// the project design doc (kept outside this repo), §7.
 package store
 
 import (

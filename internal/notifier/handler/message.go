@@ -64,7 +64,7 @@ func (h *Handler) HandleMessage(ctx context.Context, msg jetstream.Msg) error {
 			return nil
 		}
 
-		// Retry with exponential backoff
+		// Retry with linear backoff
 		delay := policy.BackoffDelay(numDelivered)
 		log.Printf("Retrying metadata failure for event %d (attempt %d/%d) in %v",
 			discovered.EventID, numDelivered, streams.EventsConsumerMaxDeliver, delay)
@@ -105,7 +105,7 @@ func (h *Handler) HandleMessage(ctx context.Context, msg jetstream.Msg) error {
 				return nil
 			}
 
-			// Retry with exponential backoff
+			// Retry with linear backoff
 			delay := policy.BackoffDelay(numDelivered)
 			log.Printf("Retrying republish in %v", delay)
 			if err := msg.NakWithDelay(delay); err != nil {
@@ -156,7 +156,7 @@ func (h *Handler) HandleMessage(ctx context.Context, msg jetstream.Msg) error {
 				return nil
 			}
 
-			// Retry with exponential backoff
+			// Retry with linear backoff
 			delay := policy.BackoffDelay(numDelivered)
 			if err := msg.NakWithDelay(delay); err != nil {
 				log.Printf("Failed to nak message for event %d: %v", discovered.EventID, err)
@@ -176,7 +176,7 @@ func (h *Handler) HandleMessage(ctx context.Context, msg jetstream.Msg) error {
 	action := policy.DecideAction(numDelivered, streams.EventsConsumerMaxDeliver)
 
 	if action == policy.ActionNak {
-		// Redelivery attempts remaining, nak with exponential backoff
+		// Redelivery attempts remaining, nak with linear backoff
 		delay := policy.BackoffDelay(numDelivered)
 		log.Printf("Failed to send notification for event %d (attempt %d/%d): %v. Retrying in %v",
 			discovered.EventID, numDelivered, streams.EventsConsumerMaxDeliver, telegramErr, delay)

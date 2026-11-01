@@ -12,7 +12,7 @@ type Config struct {
 }
 
 // defaultHubPages are the venue/series hub pages tracked when
-// TICKETLINE_HUB_PAGES is not set (design.md §6.1).
+// TICKETLINE_HUB_PAGES is not set (the project design doc (kept outside this repo), §6.1).
 var defaultHubPages = []string{}
 
 // Load builds a Config from environment variables, applying defaults where
