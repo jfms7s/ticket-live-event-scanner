@@ -17,15 +17,26 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/jfms7s/ticket-live-event-scanner/internal/shutdown"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/store"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/streams"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/webui/api"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/webui/consumer"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+)
+
+const (
+	// consumerRestartDelay is the pause before a consumer that exited is
+	// started again.
+	consumerRestartDelay = 5 * time.Second
+	// consumerStopTimeout bounds how long shutdown waits for the consumers
+	// to finish the message in hand.
+	consumerStopTimeout = 15 * time.Second
 )
 
 func main() {
@@ -96,24 +107,26 @@ func main() {
 		log.Fatalf("Failed to create notifications consumer: %v", err)
 	}
 
-	// Start the NATS consumers in background goroutines with error recovery
-	// Each consumer runs in its own goroutine and logs errors
+	// Run the NATS consumers in the background, restarting each one if it
+	// exits, until shutdown cancels ctx.
+	var consumers sync.WaitGroup
+	consumers.Add(2)
 	go func() {
-		for {
+		defer consumers.Done()
+		shutdown.RunWithRestart(ctx, "Events consumer", func(ctx context.Context) {
 			consumer.ConsumeEventsDiscovered(ctx, eventConsumer, db)
-			// Log error and retry after delay to avoid tight loop
-			log.Println("Events consumer exited, restarting in 5 seconds...")
-			time.Sleep(5 * time.Second)
-		}
+		}, consumerRestartDelay)
 	}()
-
 	go func() {
-		for {
+		defer consumers.Done()
+		shutdown.RunWithRestart(ctx, "Notifications consumer", func(ctx context.Context) {
 			consumer.ConsumeNotifications(ctx, notifConsumer, db)
-			// Log error and retry after delay
-			log.Println("Notifications consumer exited, restarting in 5 seconds...")
-			time.Sleep(5 * time.Second)
-		}
+		}, consumerRestartDelay)
+	}()
+	consumersDone := make(chan struct{})
+	go func() {
+		consumers.Wait()
+		close(consumersDone)
 	}()
 
 	// Setup HTTP server
@@ -142,10 +155,21 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan
 
-	log.Println("Shutting down...")
+	// Order matters: stop HTTP, stop the consumers and wait for the
+	// message in hand, and only then let the deferred nc.Close and
+	// db.Close run. Both waits stay inside Kubernetes' 30 s grace period.
+	log.Println("Shutting down: stopping the HTTP server...")
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("Server shutdown error: %v", err)
+	}
+
+	log.Println("Shutting down: stopping the consumers...")
+	cancel()
+	if shutdown.WaitOrTimeout(consumersDone, consumerStopTimeout) {
+		log.Println("Consumers stopped; closing NATS and the database")
+	} else {
+		log.Printf("Consumers still busy after %v; closing NATS and the database anyway", consumerStopTimeout)
 	}
 }

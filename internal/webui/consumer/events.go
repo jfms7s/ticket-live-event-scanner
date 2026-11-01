@@ -49,11 +49,21 @@ func ConsumeEventsDiscovered(ctx context.Context, consumer jetstream.Consumer, d
 	}
 	defer msgsChan.Stop()
 
-	// Watcher goroutine to stop the message channel on context cancellation
+	// Stop the message channel on shutdown; the goroutine ends with this
+	// function, so a restart doesn't leave one behind.
+	returned := make(chan struct{})
+	defer close(returned)
 	go func() {
-		<-ctx.Done()
-		msgsChan.Stop()
+		select {
+		case <-ctx.Done():
+			msgsChan.Stop()
+		case <-returned:
+		}
 	}()
+
+	// The message in hand runs to completion on a context shutdown doesn't
+	// cancel, then Next returns an error and the loop ends.
+	workCtx := context.WithoutCancel(ctx)
 
 	for {
 		msg, err := msgsChan.Next()
@@ -62,7 +72,7 @@ func ConsumeEventsDiscovered(ctx context.Context, consumer jetstream.Consumer, d
 			return
 		}
 
-		handleDiscovered(ctx, db, msg)
+		handleDiscovered(workCtx, db, msg)
 	}
 }
 

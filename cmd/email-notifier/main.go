@@ -6,14 +6,20 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/jfms7s/ticket-live-event-scanner/internal/emailnotifier/config"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/notifier/email"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/notifier/emailhandler"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/shutdown"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/streams"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
+
+// drainTimeout bounds how long shutdown waits for the message in progress,
+// under Kubernetes' default 30 s termination grace period.
+const drainTimeout = 25 * time.Second
 
 func main() {
 	cfg := config.Load()
@@ -78,10 +84,16 @@ func main() {
 }
 
 func consumeMessages(ctx context.Context, consumer jetstream.Consumer, h *emailhandler.Handler) {
+	// Messages in hand run on workCtx, not ctx: a shutdown stops new
+	// deliveries but lets a send in progress finish and be acked, so it
+	// isn't redelivered (and sent twice) after the restart.
+	workCtx, workCancel := context.WithCancel(context.Background())
+	defer workCancel()
+
 	// Consume() is non-blocking; it registers the callback and returns immediately
 	consumeCtx, err := consumer.Consume(
 		func(msg jetstream.Msg) {
-			if err := h.HandleMessage(ctx, msg); err != nil {
+			if err := h.HandleMessage(workCtx, msg); err != nil {
 				log.Printf("Error handling message: %v", err)
 			}
 		},
@@ -96,6 +108,17 @@ func consumeMessages(ctx context.Context, consumer jetstream.Consumer, h *emailh
 
 	<-ctx.Done()
 
-	// Stop message delivery cleanly before closing the connection
-	consumeCtx.Stop()
+	// Stop pulling and wait for the callback in progress to finish and ack
+	// (Stop alone doesn't wait). Stay inside Kubernetes' 30 s grace period;
+	// past the bound, cancel the send and let JetStream redeliver it.
+	consumeCtx.Drain()
+	if shutdown.WaitOrTimeout(consumeCtx.Closed(), drainTimeout) {
+		log.Println("Consumer drained")
+		return
+	}
+	log.Printf("Consumer still busy after %v; cancelling the message in progress", drainTimeout)
+	workCancel()
+	if !shutdown.WaitOrTimeout(consumeCtx.Closed(), 2*time.Second) {
+		log.Println("Consumer did not stop; closing the connection anyway")
+	}
 }
