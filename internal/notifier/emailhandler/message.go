@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/jfms7s/ticket-live-event-scanner/internal/event"
-	"github.com/jfms7s/ticket-live-event-scanner/internal/notifier/email"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/notifier/policy"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/streams"
 	"github.com/nats-io/nats.go/jetstream"
@@ -110,7 +109,7 @@ func (h *Handler) HandleMessage(ctx context.Context, msg jetstream.Msg) error {
 	}
 
 	// Try to send the calendar-invite email
-	messageID, sendErr := email.SendCalendarEmail(ctx, h.smtp, h.to, purchased)
+	messageID, sendErr := h.send(ctx, purchased)
 
 	if sendErr == nil {
 		// Success: IMMEDIATELY record in cache to protect against NATS publish failures

@@ -9,15 +9,22 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jfms7s/ticket-live-event-scanner/internal/event"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/notifier/email"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
+// publisher is the part of jetstream.JetStream the handler uses, so tests
+// can substitute a fake.
+type publisher interface {
+	Publish(ctx context.Context, subject string, data []byte, opts ...jetstream.PublishOpt) (*jetstream.PubAck, error)
+}
+
 // Handler processes purchased events.
 type Handler struct {
-	smtp email.SMTPConfig
-	to   []string
-	js   jetstream.JetStream
+	js publisher
+	// send delivers one calendar invite and returns its Message-ID.
+	send func(ctx context.Context, p event.Purchased) (string, error)
 	// recentlySent tracks recently sent emails by event_id to prevent
 	// duplicates if NATS publish fails and the message is redelivered.
 	// The cache is in memory only: a crash between a successful send and the
@@ -36,9 +43,10 @@ type recentSend struct {
 // New creates a new message handler.
 func New(smtpCfg email.SMTPConfig, to []string, js jetstream.JetStream) *Handler {
 	return &Handler{
-		smtp:         smtpCfg,
-		to:           to,
-		js:           js,
+		js: js,
+		send: func(ctx context.Context, p event.Purchased) (string, error) {
+			return email.SendCalendarEmail(ctx, smtpCfg, to, p)
+		},
 		recentlySent: make(map[int64]*recentSend),
 	}
 }
