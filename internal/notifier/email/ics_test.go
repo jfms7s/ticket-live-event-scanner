@@ -3,6 +3,7 @@ package email
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/jfms7s/ticket-live-event-scanner/internal/event"
 )
@@ -45,10 +46,10 @@ func TestBuildICS(t *testing.T) {
 		if !strings.Contains(ics, "ORGANIZER:mailto:noreply@example.com") {
 			t.Errorf("expected ORGANIZER, got:\n%s", ics)
 		}
-		if !strings.Contains(ics, "ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:a@example.com") {
+		if !strings.Contains(icsUnfold(ics), "ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:a@example.com") {
 			t.Errorf("expected ATTENDEE for a@example.com, got:\n%s", ics)
 		}
-		if !strings.Contains(ics, "ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:b@example.com") {
+		if !strings.Contains(icsUnfold(ics), "ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:b@example.com") {
 			t.Errorf("expected ATTENDEE for b@example.com, got:\n%s", ics)
 		}
 	})
@@ -115,4 +116,58 @@ func TestBuildICS(t *testing.T) {
 			t.Errorf("expected no ATTENDEE lines when attendees is empty, got:\n%s", ics)
 		}
 	})
+}
+
+func TestBuildICSNoBareCRAndFoldedLines(t *testing.T) {
+	title := "Evil\rSUMMARY:x\r\nDTSTART:19700101T000000Z " + strings.Repeat("Ã", 100)
+	p := event.Purchased{
+		EventID:   7,
+		Title:     title,
+		Venue:     "Coliseu\r\nLOCATION:elsewhere",
+		EventDate: "2026-06-15T21:00",
+		URL:       "https://ticketline.pt/evento/x-7",
+	}
+	ics, err := BuildICS(p, "noreply@example.com", []string{"a@example.com"})
+	if err != nil {
+		t.Fatalf("BuildICS() error = %v", err)
+	}
+
+	if !strings.HasSuffix(ics, "\r\n") {
+		t.Fatalf("ics does not end with CRLF")
+	}
+	for i, line := range strings.Split(strings.TrimSuffix(ics, "\r\n"), "\r\n") {
+		if strings.ContainsAny(line, "\r\n") {
+			t.Errorf("line %d has a bare CR or LF: %q", i, line)
+		}
+		if len(line) > 75 {
+			t.Errorf("line %d is %d octets, want <= 75: %q", i, len(line), line)
+		}
+		if !utf8.ValidString(line) {
+			t.Errorf("line %d splits a UTF-8 sequence: %q", i, line)
+		}
+	}
+
+	// Unfolding (RFC 5545 §3.1) must give back exactly one SUMMARY,
+	// LOCATION and DTSTART property.
+	unfolded := icsUnfold(ics)
+	for _, prop := range []string{"SUMMARY:", "LOCATION:", "DTSTART:"} {
+		n := 0
+		for _, line := range strings.Split(unfolded, "\r\n") {
+			if strings.HasPrefix(line, prop) {
+				n++
+			}
+		}
+		if n != 1 {
+			t.Errorf("got %d %s lines after unfolding, want 1:\n%s", n, prop, ics)
+		}
+	}
+	if !strings.Contains(unfolded, `SUMMARY:EvilSUMMARY:x\nDTSTART:19700101T000000Z `+strings.Repeat("Ã", 100)) {
+		t.Errorf("unfolded SUMMARY not as expected:\n%s", unfolded)
+	}
+}
+
+// icsUnfold reverses RFC 5545 §3.1 line folding (the ATTENDEE lines are
+// longer than 75 octets, so they arrive folded).
+func icsUnfold(ics string) string {
+	return strings.ReplaceAll(ics, "\r\n ", "")
 }

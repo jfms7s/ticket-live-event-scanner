@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	// Embed the IANA timezone database so time.LoadLocation("Europe/Lisbon")
 	// works even on minimal container images (e.g. alpine) that don't ship
@@ -92,16 +93,53 @@ func BuildICS(p event.Purchased, organizer string, attendees []string) (string, 
 	}
 	lines = append(lines, "END:VEVENT", "END:VCALENDAR")
 
+	for i, line := range lines {
+		lines[i] = icsFold(line)
+	}
 	return strings.Join(lines, "\r\n") + "\r\n", nil
 }
 
-// icsEscape escapes TEXT values per RFC 5545 §3.3.11.
+// icsEscaper escapes TEXT values per RFC 5545 §3.3.11. Line breaks
+// (CRLF or LF) become the escaped "\n"; a lone CR is dropped, so no value
+// can end its content line early. "\r\n" comes before "\r" because the
+// replacer tries patterns in argument order at each position.
+var icsEscaper = strings.NewReplacer(
+	`\`, `\\`,
+	`;`, `\;`,
+	`,`, `\,`,
+	"\r\n", `\n`,
+	"\n", `\n`,
+	"\r", "",
+)
+
+// icsEscape escapes a TEXT value per RFC 5545 §3.3.11.
 func icsEscape(s string) string {
-	replacer := strings.NewReplacer(
-		`\`, `\\`,
-		`;`, `\;`,
-		`,`, `\,`,
-		"\n", `\n`,
-	)
-	return replacer.Replace(s)
+	return icsEscaper.Replace(s)
+}
+
+// icsMaxLineOctets is the RFC 5545 §3.1 content-line limit, excluding the
+// line break.
+const icsMaxLineOctets = 75
+
+// icsFold folds a content line longer than 75 octets per RFC 5545 §3.1:
+// CRLF followed by one space, which counts towards the next line's 75
+// octets. It never splits a UTF-8 sequence.
+func icsFold(line string) string {
+	if len(line) <= icsMaxLineOctets {
+		return line
+	}
+	var b strings.Builder
+	limit := icsMaxLineOctets
+	for len(line) > limit {
+		cut := limit
+		for cut > 0 && !utf8.RuneStart(line[cut]) {
+			cut--
+		}
+		b.WriteString(line[:cut])
+		b.WriteString("\r\n ")
+		line = line[cut:]
+		limit = icsMaxLineOctets - 1 // the leading space uses one octet
+	}
+	b.WriteString(line)
+	return b.String()
 }
