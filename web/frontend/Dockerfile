@@ -1,4 +1,6 @@
-FROM node:24-alpine AS build
+# The build output is architecture-independent, so build natively instead
+# of under QEMU for arm64.
+FROM --platform=$BUILDPLATFORM node:24-alpine AS build
 
 WORKDIR /app
 
@@ -14,11 +16,11 @@ FROM node:24-alpine
 WORKDIR /app
 
 COPY package.json .
-COPY server.js .
+COPY server.js server-app.js ./
 COPY --from=build /app/dist dist/
 
-RUN chown -R 1000:1000 /app
-
+# Files stay root-owned: the server writes nothing (config.js is served
+# from memory), so its code and assets aren't writable by the runtime user.
 USER 1000:1000
 
 EXPOSE 3000
