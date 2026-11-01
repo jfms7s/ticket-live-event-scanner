@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -143,30 +144,43 @@ func GetEvent(ctx context.Context, db *sql.DB, id int64, now time.Time) (*EventR
 	}, nil
 }
 
-// SetEventPurchased updates the purchased flag for a single event. It
-// returns sql.ErrNoRows if no visible event with that ID exists. Marking an event
-// purchased also sets its invite to pending (clearing any earlier error) in
-// the same UPDATE, since the caller then publishes a new invite request.
-// Unmarking leaves the invite state alone: an invite already sent stays sent.
-func SetEventPurchased(ctx context.Context, db *sql.DB, id int64, purchased bool) error {
-	query := `UPDATE events SET purchased = ? WHERE id = ? AND hidden = 0`
+// SetEventPurchased sets the purchased flag for a single event and reports
+// whether it changed. It returns sql.ErrNoRows if no visible event with
+// that ID exists. Setting a flag that is already set changes nothing, so a
+// double submit doesn't publish a second invite. Marking an unpurchased
+// event purchased also sets its invite to pending (clearing any earlier
+// error) in the same UPDATE, since the caller then publishes a new invite
+// request. Unmarking leaves the invite state alone: an invite already sent
+// stays sent.
+func SetEventPurchased(ctx context.Context, db *sql.DB, id int64, purchased bool) (changed bool, err error) {
+	query := `UPDATE events SET purchased = 0 WHERE id = ? AND hidden = 0 AND purchased <> 0`
 	if purchased {
-		query = `UPDATE events SET purchased = ?, invite_status = 'pending', invite_error = NULL WHERE id = ? AND hidden = 0`
+		query = `UPDATE events SET purchased = 1, invite_status = 'pending', invite_error = NULL WHERE id = ? AND hidden = 0 AND purchased = 0`
 	}
-	result, err := db.ExecContext(ctx, query, purchased, id)
+	result, err := db.ExecContext(ctx, query, id)
 	if err != nil {
-		return fmt.Errorf("update purchased: %w", err)
+		return false, fmt.Errorf("update purchased: %w", err)
 	}
 
 	rows, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
+		return false, fmt.Errorf("rows affected: %w", err)
 	}
-	if rows == 0 {
-		return sql.ErrNoRows
+	if rows > 0 {
+		return true, nil
 	}
 
-	return nil
+	// Nothing changed: either the flag already had this value or there is
+	// no such visible event.
+	var one int
+	err = db.QueryRowContext(ctx, `SELECT 1 FROM events WHERE id = ? AND hidden = 0`, id).Scan(&one)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, sql.ErrNoRows
+		}
+		return false, fmt.Errorf("check event exists: %w", err)
+	}
+	return false, nil
 }
 
 // HideEvent is the dashboard's Remove: it hides an event from the API and
