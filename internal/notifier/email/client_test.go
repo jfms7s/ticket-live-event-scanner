@@ -2,6 +2,7 @@ package email
 
 import (
 	"encoding/base64"
+	"mime"
 	"strings"
 	"testing"
 )
@@ -60,5 +61,75 @@ func TestBuildMIMEMessage(t *testing.T) {
 	encoded := base64.StdEncoding.EncodeToString([]byte("BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nEND:VCALENDAR\r\n"))
 	if !strings.Contains(text, encoded[:20]) {
 		t.Errorf("buildMIMEMessage() missing base64-encoded ics content in:\n%s", text)
+	}
+}
+
+// headerBlock returns the top-level header lines of msg (up to the first
+// blank line).
+func headerBlock(t *testing.T, msg []byte) []string {
+	t.Helper()
+	text := string(msg)
+	end := strings.Index(text, "\r\n\r\n")
+	if end == -1 {
+		t.Fatalf("no blank line ending the header block in:\n%s", text)
+	}
+	return strings.Split(text[:end], "\r\n")
+}
+
+func TestBuildMIMEMessageRejectsHeaderInjection(t *testing.T) {
+	msg := buildMIMEMessage(
+		"noreply@example.com\r\nBcc: from@example.com",
+		[]string{"a@example.com\nBcc: to@example.com"},
+		"Calendar invite: Evil\r\nBcc: attacker@example.com",
+		"<id@x>\r\nBcc: id@example.com",
+		"body",
+		"BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n",
+	)
+
+	subjects := 0
+	for _, line := range headerBlock(t, msg) {
+		if strings.HasPrefix(line, "Subject:") {
+			subjects++
+		}
+		if strings.HasPrefix(strings.ToLower(line), "bcc:") {
+			t.Errorf("injected header line %q in:\n%s", line, msg)
+		}
+		if strings.ContainsAny(line, "\r\n") {
+			t.Errorf("header line %q contains a bare CR or LF", line)
+		}
+	}
+	if subjects != 1 {
+		t.Errorf("got %d Subject: lines, want 1:\n%s", subjects, msg)
+	}
+}
+
+func TestBuildMIMEMessageEncodesNonASCIISubject(t *testing.T) {
+	msg := buildMIMEMessage(
+		"noreply@example.com",
+		[]string{"a@example.com"},
+		"Calendar invite: Concerto de Verão",
+		"<id@x>",
+		"body",
+		"BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n",
+	)
+
+	var subject string
+	for _, line := range headerBlock(t, msg) {
+		if strings.HasPrefix(line, "Subject:") {
+			subject = line
+		}
+	}
+	if !strings.Contains(subject, "=?utf-8?q?") {
+		t.Errorf("Subject not RFC 2047 encoded: %q", subject)
+	}
+	for _, r := range subject {
+		if r > 127 {
+			t.Fatalf("Subject header carries raw non-ASCII: %q", subject)
+		}
+	}
+	dec := new(mime.WordDecoder)
+	got, err := dec.DecodeHeader(strings.TrimPrefix(subject, "Subject: "))
+	if err != nil || got != "Calendar invite: Concerto de Verão" {
+		t.Errorf("decoded subject = %q, %v", got, err)
 	}
 }

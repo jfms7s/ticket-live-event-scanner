@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
+	"mime"
 	"mime/multipart"
 	"net"
 	"net/smtp"
@@ -89,11 +90,16 @@ func buildMIMEMessage(from string, to []string, subject, messageID, textBody, ic
 	var body bytes.Buffer
 	outer := multipart.NewWriter(&body)
 
+	recipients := make([]string, len(to))
+	for i, addr := range to {
+		recipients[i] = headerValue(addr)
+	}
+
 	var buf bytes.Buffer
-	buf.WriteString(fmt.Sprintf("From: %s\r\n", from))
-	buf.WriteString(fmt.Sprintf("To: %s\r\n", strings.Join(to, ", ")))
-	buf.WriteString(fmt.Sprintf("Subject: %s\r\n", subject))
-	buf.WriteString(fmt.Sprintf("Message-ID: %s\r\n", messageID))
+	buf.WriteString(fmt.Sprintf("From: %s\r\n", headerValue(from)))
+	buf.WriteString(fmt.Sprintf("To: %s\r\n", strings.Join(recipients, ", ")))
+	buf.WriteString(fmt.Sprintf("Subject: %s\r\n", mime.QEncoding.Encode("utf-8", headerValue(subject))))
+	buf.WriteString(fmt.Sprintf("Message-ID: %s\r\n", headerValue(messageID)))
 	buf.WriteString(fmt.Sprintf("Date: %s\r\n", time.Now().UTC().Format(time.RFC1123Z)))
 	buf.WriteString("MIME-Version: 1.0\r\n")
 	buf.WriteString(fmt.Sprintf("Content-Type: multipart/mixed; boundary=%q\r\n", outer.Boundary()))
@@ -119,6 +125,13 @@ func buildMIMEMessage(from string, to []string, subject, messageID, textBody, ic
 	buf.Write(body.Bytes())
 
 	return buf.Bytes()
+}
+
+// headerValue makes s safe to write as a single header value: CR and LF
+// (which would end the header and let scraped text add new ones, such as
+// Bcc:) become spaces, and runs of whitespace collapse to one space.
+func headerValue(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // writeBase64 writes s to w as base64, wrapped at 76 characters per RFC
