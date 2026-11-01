@@ -11,7 +11,11 @@ permissions:
   packages: write
 
 jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
   build-push:
+    needs: test
     strategy:
       matrix:
         include:
