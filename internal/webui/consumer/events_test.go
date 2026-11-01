@@ -87,3 +87,12 @@ func TestMalformedDiscoveredIsTerminated(t *testing.T) {
 	handleDiscovered(context.Background(), db, m)
 	m.assertCalls(t, 0, 0, 1)
 }
+
+func TestMaterializeRetryDelay(t *testing.T) {
+	want := map[uint64]time.Duration{1: 15 * time.Second, 2: 30 * time.Second, 3: time.Minute, 4: 2 * time.Minute, 5: 4 * time.Minute, 6: 5 * time.Minute, 40: 5 * time.Minute}
+	for n, d := range want {
+		if got := materializeRetryDelay(n); got != d {
+			t.Errorf("materializeRetryDelay(%d) = %v, want %v", n, got, d)
+		}
+	}
+}

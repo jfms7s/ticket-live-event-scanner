@@ -140,8 +140,10 @@ func handleNotification(ctx context.Context, db *sql.DB, msg jetstream.Msg) {
 }
 
 // retryUntilMaterialized redelivers a Telegram result whose event the
-// events consumer hasn't stored yet, after 5s × delivery count: the
-// discovered message is normally a few seconds behind at most.
+// events consumer hasn't stored yet. The delay doubles from 15s (15, 30, 60,
+// 120s: about four minutes over MaxDeliver), which covers the events
+// consumer working through a backlog after a restart; the discovered
+// message is normally a few seconds behind at most.
 func retryUntilMaterialized(msg jetstream.Msg, eventID int64) {
 	delivered := uint64(1)
 	if meta, err := msg.Metadata(); err == nil && meta.NumDelivered > 0 {
@@ -152,7 +154,17 @@ func retryUntilMaterialized(msg jetstream.Msg, eventID int64) {
 	} else {
 		log.Printf("Event %d not materialized yet; retrying its Telegram result (delivery %d)", eventID, delivered)
 	}
-	msg.NakWithDelay(time.Duration(delivered) * 5 * time.Second)
+	msg.NakWithDelay(materializeRetryDelay(delivered))
+}
+
+// materializeRetryDelay is 15s × 2^(delivered-1), capped at 5 minutes.
+func materializeRetryDelay(delivered uint64) time.Duration {
+	const maxDelay = 5 * time.Minute
+	delay := 15 * time.Second
+	for i := uint64(1); i < delivered && delay < maxDelay; i++ {
+		delay *= 2
+	}
+	return min(delay, maxDelay)
 }
 
 // decode unmarshals msg into v, terminating msg and returning false if the
