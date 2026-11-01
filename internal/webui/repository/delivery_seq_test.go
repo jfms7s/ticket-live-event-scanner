@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -85,13 +86,23 @@ func mustFailed(t *testing.T, db *sql.DB, f *event.NotificationFailed) {
 }
 
 // QA scenario 1: the sent result is consumed before its events.discovered
-// message (they arrive on independent consumers). The row must end sent.
+// message (they arrive on independent consumers). For a new event there is
+// no event row yet, so the result is refused for redelivery; once the
+// discovered message is in, the redelivered result resolves the row.
 func TestDeliverySeq_SentBeforeDiscoveredEndsSent(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	mustSent(t, db, sentResult(1, 10, "42"))
+	err := UpdateNotificationSent(context.Background(), db, sentResult(1, 10, "42"))
+	if !errors.Is(err, ErrEventNotMaterialized) {
+		t.Fatalf("result before its event: err = %v, want ErrEventNotMaterialized", err)
+	}
+	if rows := notifRows(t, db, 1); len(rows) != 0 {
+		t.Fatalf("refused result wrote rows: %+v", rows)
+	}
+
 	mustUpsert(t, db, discovered(1, event.ReasonDiscovered), 10)
+	mustSent(t, db, sentResult(1, 10, "42")) // redelivery
 
 	rows := notifRows(t, db, 1)
 	if len(rows) != 1 {
@@ -103,17 +114,61 @@ func TestDeliverySeq_SentBeforeDiscoveredEndsSent(t *testing.T) {
 	}
 }
 
-// A failed result that arrives first also keeps its status.
-func TestDeliverySeq_FailedBeforeDiscoveredEndsFailed(t *testing.T) {
+// When the event is already known (a manual retry), a result that arrives
+// before its discovered message creates the row, and the discovered upsert
+// then leaves its status alone.
+func TestDeliverySeq_ResultBeforeRetryCreatesRow(t *testing.T) {
+	for _, status := range []string{"sent", "failed"} {
+		t.Run(status, func(t *testing.T) {
+			db := setupTestDB(t)
+			defer db.Close()
+
+			mustUpsert(t, db, discovered(1, event.ReasonDiscovered), 9)
+			mustSent(t, db, sentResult(1, 9, "first"))
+
+			if status == "sent" {
+				mustSent(t, db, sentResult(1, 10, "42"))
+			} else {
+				mustFailed(t, db, failedResult(1, 10))
+			}
+			mustUpsert(t, db, discovered(1, event.ReasonManualRetry), 10)
+
+			rows := notifRows(t, db, 1)
+			if len(rows) != 2 {
+				t.Fatalf("rows = %+v, want two", rows)
+			}
+			r := rows[1]
+			if r.status != status || r.deliverySeq.Int64 != 10 || r.triggeredBy != "manual-retry" {
+				t.Errorf("retry row = %+v, want %s, seq 10, manual-retry", r, status)
+			}
+		})
+	}
+}
+
+// With foreign keys enforced (sqld may enforce them), the result-first
+// paths still work: nothing is inserted before the event exists.
+func TestDeliverySeq_ForeignKeysOn(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		t.Fatalf("enable foreign keys: %v", err)
+	}
+	var fk int
+	if err := db.QueryRow(`PRAGMA foreign_keys`).Scan(&fk); err != nil || fk != 1 {
+		t.Fatalf("foreign_keys = %d (%v), want 1", fk, err)
+	}
 
+	if err := UpdateNotificationFailed(context.Background(), db, failedResult(1, 10)); !errors.Is(err, ErrEventNotMaterialized) {
+		t.Fatalf("err = %v, want ErrEventNotMaterialized", err)
+	}
+	mustUpsert(t, db, discovered(1, event.ReasonDiscovered), 10)
+	mustSent(t, db, sentResult(1, 11, "retry")) // a later message's result, event known
+	mustUpsert(t, db, discovered(1, event.ReasonManualRetry), 11)
 	mustFailed(t, db, failedResult(1, 10))
-	mustUpsert(t, db, discovered(1, event.ReasonManualRetry), 10)
 
-	rows := notifRows(t, db, 1)
-	if len(rows) != 1 || rows[0].status != "failed" || rows[0].errMsg.String != "telegram 500" || rows[0].triggeredBy != "manual-retry" {
-		t.Fatalf("rows = %+v, want one failed manual-retry row with the error", rows)
+	got := statusBySeq(notifRows(t, db, 1))
+	if len(got) != 2 || got[10] != "failed" || got[11] != "sent" {
+		t.Fatalf("rows by seq = %v, want 10 failed and 11 sent", got)
 	}
 }
 
@@ -255,5 +310,52 @@ func TestDeliverySeq_SameSeqOnDifferentEventsIsTwoRows(t *testing.T) {
 	}
 	if r := notifRows(t, db, 2); len(r) != 1 || r[0].status != "sent" {
 		t.Errorf("event 2 rows = %+v, want one sent", r)
+	}
+}
+
+// A sent result after a failed one for the same message wins.
+func TestDeliverySeq_SentOverwritesFailed(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	mustUpsert(t, db, discovered(1, event.ReasonDiscovered), 20)
+	mustFailed(t, db, failedResult(1, 20))
+	mustSent(t, db, sentResult(1, 20, "42"))
+
+	rows := notifRows(t, db, 1)
+	if len(rows) != 1 || rows[0].status != "sent" || rows[0].messageID.String != "42" || rows[0].errMsg.Valid {
+		t.Fatalf("rows = %+v, want one sent row with message 42 and no error", rows)
+	}
+}
+
+// Rollout: an older web-ui-api stored a scraper message's row without a
+// sequence and died before acking, and this one gets the redelivery. The
+// redelivery stamps the existing pending row instead of adding a second one.
+func TestDeliverySeq_RedeliveryAdoptsLegacyPendingRow(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	d := discovered(1, event.ReasonDiscovered)
+	mustUpsert(t, db, d, 0)  // older web-ui-api
+	mustUpsert(t, db, d, 50) // redelivery to this one
+	mustSent(t, db, sentResult(1, 50, "42"))
+
+	rows := notifRows(t, db, 1)
+	if len(rows) != 1 || rows[0].status != "sent" || rows[0].deliverySeq.Int64 != 50 {
+		t.Fatalf("rows = %+v, want one sent row with seq 50", rows)
+	}
+}
+
+// A manual retry never adopts an older pending row: it is a new send.
+func TestDeliverySeq_ManualRetryDoesNotAdoptLegacyRow(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	mustUpsert(t, db, discovered(1, event.ReasonDiscovered), 0)
+	mustUpsert(t, db, discovered(1, event.ReasonManualRetry), 60)
+
+	rows := notifRows(t, db, 1)
+	if len(rows) != 2 || rows[0].deliverySeq.Valid || rows[1].deliverySeq.Int64 != 60 {
+		t.Fatalf("rows = %+v, want the legacy row untouched and a new row with seq 60", rows)
 	}
 }

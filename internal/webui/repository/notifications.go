@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -61,12 +62,44 @@ func UpsertEventAndInsertNotification(ctx context.Context, db *sql.DB, disc *eve
 	}
 
 	if deliverySeq != 0 {
+		seq := int64(deliverySeq)
+		// A scraper message that finds a pending row from before delivery_seq
+		// existed stamps it with its sequence instead of adding a row: the
+		// old redelivery guard, kept for messages consumed by an older
+		// web-ui-api and redelivered to this one. Manual retries always get
+		// their own row.
+		if disc.Reason == event.ReasonDiscovered {
+			adopted, err := tx.ExecContext(ctx, `
+				UPDATE notifications SET delivery_seq = ?
+				WHERE id = (
+					SELECT id FROM notifications
+					WHERE event_id = ? AND status = 'pending' AND delivery_seq IS NULL
+					ORDER BY attempted_at DESC, id DESC
+					LIMIT 1
+				)
+				AND NOT EXISTS (
+					SELECT 1 FROM notifications WHERE event_id = ? AND delivery_seq = ?
+				)
+			`, seq, disc.EventID, disc.EventID, seq)
+			if err != nil {
+				return fmt.Errorf("adopt legacy pending notification: %w", err)
+			}
+			if n, err := adopted.RowsAffected(); err != nil {
+				return fmt.Errorf("rows affected: %w", err)
+			} else if n > 0 {
+				if err := tx.Commit(); err != nil {
+					return fmt.Errorf("commit transaction: %w", err)
+				}
+				return nil
+			}
+		}
+
 		// Never touch status: a result for this message may already be in.
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO notifications (event_id, status, triggered_by, attempted_at, delivery_seq)
 			VALUES (?, 'pending', ?, ?, ?)
 			ON CONFLICT(event_id, delivery_seq) DO UPDATE SET triggered_by = excluded.triggered_by
-		`, disc.EventID, triggeredBy, now, int64(deliverySeq))
+		`, disc.EventID, triggeredBy, now, seq)
 		if err != nil {
 			return fmt.Errorf("upsert notification: %w", err)
 		}
@@ -110,6 +143,11 @@ func UpsertEventAndInsertNotification(ctx context.Context, db *sql.DB, disc *eve
 	return nil
 }
 
+// ErrEventNotMaterialized means a delivery result arrived before the
+// events consumer stored its event, so there is no row to attach it to yet.
+// The caller should redeliver it after a delay.
+var ErrEventNotMaterialized = errors.New("event not materialized yet")
+
 // notificationResult is a sent or failed delivery result to apply to the
 // notification row of one events.discovered message.
 type notificationResult struct {
@@ -130,10 +168,18 @@ type notificationResult struct {
 //     message metadata), which it adopts by setting delivery_seq;
 //  3. otherwise a new row in the result's status, since the result arrived
 //     before its events.discovered message (that message's upsert then
-//     finds the row and leaves its status alone).
+//     finds the row and leaves its status alone). When the event itself is
+//     not in the database yet, it returns ErrEventNotMaterialized and
+//     writes nothing.
 //
 // "sent" wins over "failed": a failed result never overwrites a sent row,
 // because Telegram did deliver the message.
+//
+// Limits: adoption (step 2) picks the latest legacy pending row, so while
+// rows from before delivery_seq are still pending, a result for a newer
+// message of the same event can resolve the older row; this only affects
+// the rollout window. Sequences restart if the EVENTS stream is recreated,
+// so a reused (event_id, delivery_seq) pair would match the old row.
 //
 // Without a delivery sequence (a result from a telegram-notifier that
 // predates delivery_seq) it resolves the event's latest pending row, as
@@ -167,6 +213,17 @@ func applyNotificationResult(ctx context.Context, db *sql.DB, r notificationResu
 		return fmt.Errorf("rows affected: %w", err)
 	} else if n > 0 {
 		return nil
+	}
+
+	// Step 3 needs the event row (notifications.event_id references it, and
+	// sqld may enforce that). If the events consumer hasn't materialized the
+	// event yet, the caller retries later.
+	var eventKnown bool
+	if err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE id = ?)`, r.eventID).Scan(&eventKnown); err != nil {
+		return fmt.Errorf("check event exists: %w", err)
+	}
+	if !eventKnown {
+		return ErrEventNotMaterialized
 	}
 
 	_, err = db.ExecContext(ctx, `

@@ -41,21 +41,24 @@ func notificationRows(t *testing.T, db *sql.DB, id int64) (statuses []string, se
 }
 
 // The events consumer stores the message's EVENTS stream sequence as the
-// row's delivery_seq, and a sent result carrying that sequence resolves it
-// even when the result is consumed first.
+// row's delivery_seq. A sent result consumed before it is nak'd with a
+// delay (its event isn't stored yet); its redelivery resolves the row.
 func TestDiscoveredStoresStreamSequenceAndResultMatchesIt(t *testing.T) {
 	db := setupDB(t)
 	ctx := context.Background()
+	result := event.NotificationSent{EventID: 1, TelegramMessageID: "42", SentAt: time.Now(), DeliverySeq: 77}
 
-	sent := jsonMsg(t, streams.NotificationsSentSubject, event.NotificationSent{
-		EventID: 1, TelegramMessageID: "42", SentAt: time.Now(), DeliverySeq: 77,
-	})
-	handleNotification(ctx, db, sent)
-	sent.assertCalls(t, 1, 0, 0)
+	early := jsonMsg(t, streams.NotificationsSentSubject, result)
+	handleNotification(ctx, db, early)
+	early.assertCalls(t, 0, 1, 0)
 
 	disc := discoveredMsg(t, 1, 77)
 	handleDiscovered(ctx, db, disc)
 	disc.assertCalls(t, 1, 0, 0)
+
+	redelivered := jsonMsg(t, streams.NotificationsSentSubject, result)
+	handleNotification(ctx, db, redelivered)
+	redelivered.assertCalls(t, 1, 0, 0)
 
 	statuses, seqs := notificationRows(t, db, 1)
 	if len(statuses) != 1 || statuses[0] != "sent" || seqs[0].Int64 != 77 {

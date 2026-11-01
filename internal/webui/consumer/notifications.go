@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/jfms7s/ticket-live-event-scanner/internal/event"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/streams"
@@ -84,6 +86,10 @@ func handleNotification(ctx context.Context, db *sql.DB, msg jetstream.Msg) {
 			return
 		}
 		if err := repository.UpdateNotificationSent(ctx, db, &sent); err != nil {
+			if errors.Is(err, repository.ErrEventNotMaterialized) {
+				retryUntilMaterialized(msg, sent.EventID)
+				return
+			}
 			log.Printf("Failed to update notification sent for event %d: %v", sent.EventID, err)
 			msg.Nak()
 			return
@@ -95,6 +101,10 @@ func handleNotification(ctx context.Context, db *sql.DB, msg jetstream.Msg) {
 			return
 		}
 		if err := repository.UpdateNotificationFailed(ctx, db, &failed); err != nil {
+			if errors.Is(err, repository.ErrEventNotMaterialized) {
+				retryUntilMaterialized(msg, failed.EventID)
+				return
+			}
 			log.Printf("Failed to update notification failed for event %d: %v", failed.EventID, err)
 			msg.Nak()
 			return
@@ -127,6 +137,22 @@ func handleNotification(ctx context.Context, db *sql.DB, msg jetstream.Msg) {
 	}
 
 	msg.Ack()
+}
+
+// retryUntilMaterialized redelivers a Telegram result whose event the
+// events consumer hasn't stored yet, after 5s × delivery count: the
+// discovered message is normally a few seconds behind at most.
+func retryUntilMaterialized(msg jetstream.Msg, eventID int64) {
+	delivered := uint64(1)
+	if meta, err := msg.Metadata(); err == nil && meta.NumDelivered > 0 {
+		delivered = meta.NumDelivered
+	}
+	if delivered >= streams.EventsConsumerMaxDeliver {
+		log.Printf("WARN event %d still not materialized after %d deliveries; its Telegram result will be dropped", eventID, delivered)
+	} else {
+		log.Printf("Event %d not materialized yet; retrying its Telegram result (delivery %d)", eventID, delivered)
+	}
+	msg.NakWithDelay(time.Duration(delivered) * 5 * time.Second)
 }
 
 // decode unmarshals msg into v, terminating msg and returning false if the
