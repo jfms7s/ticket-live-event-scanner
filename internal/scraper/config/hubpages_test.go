@@ -52,3 +52,12 @@ func TestGetEnvHubPages(t *testing.T) {
 		}
 	})
 }
+
+func TestRequireHubPages(t *testing.T) {
+	if err := requireHubPages(nil); err == nil {
+		t.Error("requireHubPages(nil) = nil, want an error: an unset TICKETLINE_HUB_PAGES must stop the scraper")
+	}
+	if err := requireHubPages([]string{"auchan-live-academia-maia-98164"}); err != nil {
+		t.Errorf("requireHubPages(one page) = %v, want nil", err)
+	}
+}

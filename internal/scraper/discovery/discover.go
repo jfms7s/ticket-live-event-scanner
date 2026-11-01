@@ -26,6 +26,10 @@ func (s *Scraper) Discover(ctx context.Context) error {
 		// Extract event ID from hub page slug
 		hubID := parse.ExtractIDFromSlug(hubSlug)
 		if hubID == 0 {
+			// A misconfigured entry: it can never be scraped, so say so
+			// on every run instead of skipping it silently.
+			log.Printf("ERROR hub page %q has no event ID in its slug", hubSlug)
+			errorCount++
 			continue
 		}
 
@@ -60,6 +64,12 @@ func (s *Scraper) fetchHubPage(ctx context.Context, hubSlug string, hubID int64)
 	sessions, err := parse.ParseHubSessions(body)
 	if err != nil {
 		return fmt.Errorf("parse hub page %d: %w", hubID, err)
+	}
+	// A tracked hub page always lists its sessions; zero cards most likely
+	// means ticketline.pt changed its markup, which must not look like "no
+	// new sessions".
+	if len(sessions) == 0 {
+		return fmt.Errorf("hub page %d: no session cards found (markup change?)", hubID)
 	}
 
 	var errorCount int
