@@ -77,6 +77,10 @@ func sendTelegramMessage(ctx context.Context, client *http.Client, apiBaseURL, c
 		return "", fmt.Errorf("read response body: %w", err)
 	}
 
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return "", rateLimited(body)
+	}
+
 	// Check HTTP status code
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("telegram API returned %d: %s", resp.StatusCode, string(body))
@@ -130,4 +134,32 @@ func redactToken(err error, apiBaseURL string) error {
 		return err
 	}
 	return errors.New(strings.ReplaceAll(err.Error(), token, "<redacted>"))
+}
+
+// defaultRetryAfter is used when a 429 doesn't say how long to wait.
+const defaultRetryAfter = 30 * time.Second
+
+// RateLimitedError is Telegram's 429 Too Many Requests: the bot must wait
+// RetryAfter before sending again. Its text carries no URL or token.
+type RateLimitedError struct {
+	RetryAfter time.Duration
+}
+
+func (e *RateLimitedError) Error() string {
+	return fmt.Sprintf("telegram rate limited, retry after %v", e.RetryAfter)
+}
+
+// rateLimited builds the RateLimitedError for a 429 response body
+// ({"parameters":{"retry_after":N}}, N in seconds).
+func rateLimited(body []byte) error {
+	var resp struct {
+		Parameters struct {
+			RetryAfter int `json:"retry_after"`
+		} `json:"parameters"`
+	}
+	retryAfter := defaultRetryAfter
+	if err := json.Unmarshal(body, &resp); err == nil && resp.Parameters.RetryAfter > 0 {
+		retryAfter = time.Duration(resp.Parameters.RetryAfter) * time.Second
+	}
+	return &RateLimitedError{RetryAfter: retryAfter}
 }

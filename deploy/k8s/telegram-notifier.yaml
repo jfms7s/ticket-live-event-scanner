@@ -36,6 +36,9 @@ spec:
             secretKeyRef:
               name: telegram-bot-token
               key: chat_id
+        # Optional: minimum time between sends (Go duration, default 3s, 0 = off)
+        # - name: TELEGRAM_MIN_SEND_INTERVAL
+        #   value: "3s"
         livenessProbe:
           exec:
             command:
