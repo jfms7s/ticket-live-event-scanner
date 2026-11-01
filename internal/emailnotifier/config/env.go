@@ -31,6 +31,16 @@ func getEnvInt(key string, defaultVal int) int {
 	return defaultVal
 }
 
+// getEnvBool reports whether key is set to "true" or "1" (case-insensitive).
+// Anything else, including unset, is false.
+func getEnvBool(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "true", "1":
+		return true
+	}
+	return false
+}
+
 // getEnvList splits a required, comma-separated environment variable into
 // a list of trimmed, non-empty values (e.g. EMAIL_TO=a@x.com,b@x.com).
 func getEnvList(key string) []string {

@@ -60,3 +60,29 @@ func TestGetEnvInt(t *testing.T) {
 		}
 	})
 }
+
+func TestGetEnvBool(t *testing.T) {
+	const key = "SMTP_ALLOW_PLAINTEXT_TEST"
+	for _, tc := range []struct {
+		value string
+		set   bool
+		want  bool
+	}{
+		{"", false, false},
+		{"true", true, true},
+		{"TRUE", true, true},
+		{"1", true, true},
+		{"false", true, false},
+		{"0", true, false},
+		{"yes", true, false},
+	} {
+		if tc.set {
+			t.Setenv(key, tc.value)
+		} else {
+			os.Unsetenv(key)
+		}
+		if got := getEnvBool(key); got != tc.want {
+			t.Errorf("getEnvBool(%q set=%v) = %v, want %v", tc.value, tc.set, got, tc.want)
+		}
+	}
+}

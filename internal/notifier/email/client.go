@@ -14,15 +14,17 @@ import (
 	"net"
 	"net/smtp"
 	"net/textproto"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/jfms7s/ticket-live-event-scanner/internal/event"
 )
 
-// smtpDialTimeout leaves margin under JetStream's 30s AckWait, matching
-// the timeout used by the Telegram client.
-const smtpDialTimeout = 20 * time.Second
+// smtpTimeout bounds the whole SMTP conversation, from dial to QUIT. It
+// leaves margin under JetStream's 30s AckWait, matching the timeout used
+// by the Telegram client. A variable so tests can shorten it.
+var smtpTimeout = 20 * time.Second
 
 // SMTPConfig holds the SMTP relay credentials used to send calendar
 // invites.
@@ -32,6 +34,10 @@ type SMTPConfig struct {
 	Username string
 	Password string
 	From     string
+	// AllowPlaintext lets the client send without TLS when the server
+	// doesn't offer STARTTLS. Only for local testing against a relay
+	// without TLS; off by default.
+	AllowPlaintext bool
 }
 
 // SendCalendarEmail builds a .ics calendar invite for p and emails it to
@@ -147,19 +153,48 @@ func writeBase64(w interface{ Write([]byte) (int, error) }, s string) {
 	}
 }
 
-// sendViaSMTP dials cfg's SMTP relay, negotiates STARTTLS/AUTH when
-// offered, and sends msg to to. Dialing is bounded by smtpDialTimeout so a
-// hung connection can't outlive JetStream's AckWait.
+// sendViaSMTP dials cfg's SMTP relay, upgrades to TLS with STARTTLS,
+// authenticates when credentials are configured, and sends msg to to. It
+// refuses to send in cleartext unless cfg.AllowPlaintext is set, and
+// refuses to send unauthenticated when credentials are configured but the
+// server doesn't offer AUTH. The whole conversation is bounded by
+// smtpTimeout (or ctx's earlier deadline) so a stalled relay can't outlive
+// JetStream's AckWait, and cancelling ctx ends it.
 func sendViaSMTP(ctx context.Context, cfg SMTPConfig, to []string, msg []byte) error {
-	dialCtx, cancel := context.WithTimeout(ctx, smtpDialTimeout)
+	deadline := time.Now().Add(smtpTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	sessionCtx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 
+	err := smtpSession(sessionCtx, cfg, to, msg)
+	if err != nil && ctx.Err() != nil {
+		return fmt.Errorf("%w: %w", ctx.Err(), err)
+	}
+	return err
+}
+
+// smtpSession runs one SMTP conversation. Its connection's deadline is
+// ctx's deadline, and cancelling ctx pulls that deadline in to now so any
+// blocked read or write returns.
+func smtpSession(ctx context.Context, cfg SMTPConfig, to []string, msg []byte) error {
 	var d net.Dialer
-	conn, err := d.DialContext(dialCtx, "tcp", fmt.Sprintf("%s:%d", cfg.Host, cfg.Port))
+	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port)))
 	if err != nil {
 		return fmt.Errorf("dial smtp server: %w", err)
 	}
 	defer conn.Close()
+
+	// The deadline survives StartTLS, which wraps this same net.Conn.
+	deadline, _ := ctx.Deadline()
+	if err := conn.SetDeadline(deadline); err != nil {
+		return fmt.Errorf("set smtp deadline: %w", err)
+	}
+	stop := context.AfterFunc(ctx, func() {
+		conn.SetDeadline(time.Now())
+	})
+	defer stop()
 
 	client, err := smtp.NewClient(conn, cfg.Host)
 	if err != nil {
@@ -167,18 +202,28 @@ func sendViaSMTP(ctx context.Context, cfg SMTPConfig, to []string, msg []byte) e
 	}
 	defer client.Close()
 
+	// Say EHLO explicitly so a timeout or hangup here is reported as such,
+	// rather than as a missing STARTTLS/AUTH extension (Extension discards
+	// the EHLO error).
+	if err := client.Hello("localhost"); err != nil {
+		return fmt.Errorf("EHLO: %w", err)
+	}
+
 	if ok, _ := client.Extension("STARTTLS"); ok {
-		if err := client.StartTLS(&tls.Config{ServerName: cfg.Host}); err != nil {
+		if err := client.StartTLS(&tls.Config{ServerName: cfg.Host, MinVersion: tls.VersionTLS12}); err != nil {
 			return fmt.Errorf("starttls: %w", err)
 		}
+	} else if !cfg.AllowPlaintext {
+		return fmt.Errorf("smtp server %s does not offer STARTTLS (set SMTP_ALLOW_PLAINTEXT to send in cleartext)", cfg.Host)
 	}
 
 	if cfg.Username != "" {
-		if ok, _ := client.Extension("AUTH"); ok {
-			auth := smtp.PlainAuth("", cfg.Username, cfg.Password, cfg.Host)
-			if err := client.Auth(auth); err != nil {
-				return fmt.Errorf("smtp auth: %w", err)
-			}
+		if ok, _ := client.Extension("AUTH"); !ok {
+			return fmt.Errorf("smtp server %s does not offer AUTH but credentials are configured", cfg.Host)
+		}
+		auth := smtp.PlainAuth("", cfg.Username, cfg.Password, cfg.Host)
+		if err := client.Auth(auth); err != nil {
+			return fmt.Errorf("smtp auth: %w", err)
 		}
 	}
 
