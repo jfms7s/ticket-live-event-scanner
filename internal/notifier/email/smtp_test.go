@@ -17,6 +17,7 @@ type fakeSMTP struct {
 	ln     net.Listener
 	caps   []string
 	silent bool
+	hangup bool // close the connection on EHLO
 
 	mu   sync.Mutex
 	cmds []string
@@ -25,11 +26,18 @@ type fakeSMTP struct {
 
 func startFakeSMTP(t *testing.T, caps []string, silent bool) *fakeSMTP {
 	t.Helper()
+	return serveFakeSMTP(t, &fakeSMTP{caps: caps, silent: silent})
+}
+
+// serveFakeSMTP listens on 127.0.0.1:0 and serves s, whose script fields
+// must be set before the call.
+func serveFakeSMTP(t *testing.T, s *fakeSMTP) *fakeSMTP {
+	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	s := &fakeSMTP{ln: ln, caps: caps, silent: silent}
+	s.ln = ln
 	t.Cleanup(func() { ln.Close() })
 	go s.serve()
 	return s
@@ -73,6 +81,9 @@ func (s *fakeSMTP) serve() {
 		s.mu.Unlock()
 		if s.silent {
 			continue // read and never answer
+		}
+		if s.hangup {
+			return
 		}
 		verb := strings.ToUpper(strings.SplitN(line, " ", 2)[0])
 		switch verb {
@@ -202,6 +213,20 @@ func TestSendViaSMTPTimeoutCoversWholeConversation(t *testing.T) {
 	}
 	if elapsed > 2*time.Second {
 		t.Errorf("sendViaSMTP() took %v, want about smtpTimeout (200ms)", elapsed)
+	}
+	if strings.Contains(err.Error(), "does not offer") {
+		t.Errorf("a timeout is reported as a missing extension: %v", err)
+	}
+}
+
+func TestSendViaSMTPHangupOnEHLOIsNotSent(t *testing.T) {
+	srv := serveFakeSMTP(t, &fakeSMTP{hangup: true})
+	cfg := srv.cfg()
+	cfg.AllowPlaintext = true
+
+	err := sendViaSMTP(context.Background(), cfg, []string{"a@example.com"}, []byte("Subject: x\r\n\r\nbody\r\n"))
+	if err == nil || !strings.Contains(err.Error(), "EHLO") {
+		t.Fatalf("sendViaSMTP() error = %v, want one mentioning EHLO", err)
 	}
 }
 

@@ -202,6 +202,13 @@ func smtpSession(ctx context.Context, cfg SMTPConfig, to []string, msg []byte) e
 	}
 	defer client.Close()
 
+	// Say EHLO explicitly so a timeout or hangup here is reported as such,
+	// rather than as a missing STARTTLS/AUTH extension (Extension discards
+	// the EHLO error).
+	if err := client.Hello("localhost"); err != nil {
+		return fmt.Errorf("EHLO: %w", err)
+	}
+
 	if ok, _ := client.Extension("STARTTLS"); ok {
 		if err := client.StartTLS(&tls.Config{ServerName: cfg.Host, MinVersion: tls.VersionTLS12}); err != nil {
 			return fmt.Errorf("starttls: %w", err)
