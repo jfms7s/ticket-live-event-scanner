@@ -100,6 +100,10 @@ func consumeMessages(ctx context.Context, consumer jetstream.Consumer, h *emailh
 		jetstream.ConsumeErrHandler(func(consumeCtx jetstream.ConsumeContext, err error) {
 			log.Printf("Consume error: %v", err)
 		}),
+		// Messages are handled one at a time, so buffer one: on shutdown
+		// Drain() then finishes the message in hand (and at most one
+		// more) instead of working through a prefetched backlog.
+		jetstream.PullMaxMessages(1),
 	)
 
 	if err != nil {
