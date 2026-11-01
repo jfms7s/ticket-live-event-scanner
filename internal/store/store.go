@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS notifications (
     attempted_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     confirmed_at        TIMESTAMP,
     error               TEXT,
-    triggered_by        TEXT NOT NULL DEFAULT 'scraper'
+    triggered_by        TEXT NOT NULL DEFAULT 'scraper',
+    delivery_seq        INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_notifications_event_id ON notifications(event_id);
@@ -81,6 +82,22 @@ var addedEventColumns = []string{
 	"hidden BOOLEAN NOT NULL DEFAULT 0",
 }
 
+// addedNotificationColumns are notifications columns added after the
+// table already existed in production; same rules as addedEventColumns.
+var addedNotificationColumns = []string{
+	// delivery_seq is the EVENTS stream sequence of the events.discovered
+	// message a row was made for (NULL on rows from before it existed).
+	"delivery_seq INTEGER",
+}
+
+// postColumnIndexes reference added columns, so Migrate creates them after
+// the ADD COLUMNs rather than in Schema, which runs first and would fail on
+// an older table that lacks the column. SQLite treats NULLs as distinct in
+// a UNIQUE index, so rows without delivery_seq never conflict.
+const postColumnIndexes = `
+CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_event_delivery_seq ON notifications(event_id, delivery_seq);
+`
+
 // addColumn runs ALTER TABLE ... ADD COLUMN, treating "duplicate column
 // name" as already applied, since SQLite has no ADD COLUMN IF NOT EXISTS.
 func addColumn(ctx context.Context, db *sql.DB, table, def string) error {
@@ -93,8 +110,8 @@ func addColumn(ctx context.Context, db *sql.DB, table, def string) error {
 	return nil
 }
 
-// Migrate applies Schema, then adds any events columns an older database
-// lacks. Safe to call repeatedly.
+// Migrate applies Schema, then adds any columns an older database lacks
+// and the indexes on them. Safe to call repeatedly.
 func Migrate(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, Schema); err != nil {
 		return fmt.Errorf("migrate schema: %w", err)
@@ -104,6 +121,16 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		if err := addColumn(ctx, db, "events", col); err != nil {
 			return fmt.Errorf("migrate schema: %w", err)
 		}
+	}
+
+	for _, col := range addedNotificationColumns {
+		if err := addColumn(ctx, db, "notifications", col); err != nil {
+			return fmt.Errorf("migrate schema: %w", err)
+		}
+	}
+
+	if _, err := db.ExecContext(ctx, postColumnIndexes); err != nil {
+		return fmt.Errorf("migrate indexes: %w", err)
 	}
 
 	return nil

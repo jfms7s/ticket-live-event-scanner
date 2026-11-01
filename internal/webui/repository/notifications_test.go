@@ -129,7 +129,7 @@ func TestManualRetryWithExistingPendingNotification(t *testing.T) {
 		Reason:    event.ReasonManualRetry, // Critical: manual retrigger should always insert
 	}
 
-	if err := UpsertEventAndInsertNotification(ctx, db, disc); err != nil {
+	if err := UpsertEventAndInsertNotification(ctx, db, disc, 0); err != nil {
 		t.Fatalf("Failed to call UpsertEventAndInsertNotification with ReasonManualRetry: %v", err)
 	}
 
@@ -207,7 +207,7 @@ func TestDiscoveryIdempotencyWithExistingPending(t *testing.T) {
 		Reason:    event.ReasonDiscovered, // Critical: this is the discovery path
 	}
 
-	if err := UpsertEventAndInsertNotification(ctx, db, disc); err != nil {
+	if err := UpsertEventAndInsertNotification(ctx, db, disc, 0); err != nil {
 		t.Fatalf("Failed to call UpsertEventAndInsertNotification: %v", err)
 	}
 

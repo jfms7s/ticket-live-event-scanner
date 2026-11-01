@@ -33,6 +33,11 @@ type NotificationSent struct {
 	EventID           int64     `json:"event_id"`
 	TelegramMessageID string    `json:"telegram_message_id"`
 	SentAt            time.Time `json:"sent_at"`
+	// DeliverySeq is the EVENTS stream sequence of the events.discovered
+	// message this result is for; web-ui-api matches it to the row it made
+	// for that message. 0 (omitted) means unknown, and web-ui-api falls back
+	// to the event's latest pending row.
+	DeliverySeq uint64 `json:"delivery_seq,omitempty"`
 }
 
 // NotificationFailed is published to subject "notifications.failed" by
@@ -42,6 +47,8 @@ type NotificationFailed struct {
 	Error    string    `json:"error"`
 	FailedAt time.Time `json:"failed_at"`
 	Attempts int       `json:"attempts"`
+	// DeliverySeq: as on NotificationSent.
+	DeliverySeq uint64 `json:"delivery_seq,omitempty"`
 }
 
 // Purchased is published to subject "events.purchased" by web-ui-api when

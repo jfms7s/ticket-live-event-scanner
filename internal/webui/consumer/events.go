@@ -61,21 +61,35 @@ func ConsumeEventsDiscovered(ctx context.Context, consumer jetstream.Consumer, d
 			return
 		}
 
-		var disc event.Discovered
-		if err := json.Unmarshal(msg.Data(), &disc); err != nil {
-			log.Printf("Failed to unmarshal Discovered message: %v", err)
-			// Malformed message will never become parseable on retry, so terminate it
-			msg.Term()
-			continue
-		}
-
-		// Upsert event and insert pending notification in a transaction
-		if err := repository.UpsertEventAndInsertNotification(ctx, db, &disc); err != nil {
-			log.Printf("Failed to materialize event %d: %v", disc.EventID, err)
-			msg.Nak()
-			continue
-		}
-
-		msg.Ack()
+		handleDiscovered(ctx, db, msg)
 	}
+}
+
+// handleDiscovered materializes one events.discovered message and acks,
+// naks or terminates it. The message's EVENTS stream sequence becomes the
+// notification row's delivery_seq; without metadata it is 0 (unknown).
+func handleDiscovered(ctx context.Context, db *sql.DB, msg jetstream.Msg) {
+	var disc event.Discovered
+	if err := json.Unmarshal(msg.Data(), &disc); err != nil {
+		log.Printf("Failed to unmarshal Discovered message: %v", err)
+		// Malformed message will never become parseable on retry, so terminate it
+		msg.Term()
+		return
+	}
+
+	var deliverySeq uint64
+	if meta, err := msg.Metadata(); err != nil {
+		log.Printf("No metadata for event %d, recording it without delivery_seq: %v", disc.EventID, err)
+	} else {
+		deliverySeq = meta.Sequence.Stream
+	}
+
+	// Upsert event and insert pending notification in a transaction
+	if err := repository.UpsertEventAndInsertNotification(ctx, db, &disc, deliverySeq); err != nil {
+		log.Printf("Failed to materialize event %d: %v", disc.EventID, err)
+		msg.Nak()
+		return
+	}
+
+	msg.Ack()
 }

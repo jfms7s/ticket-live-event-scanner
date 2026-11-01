@@ -197,3 +197,87 @@ func TestMigrateAddsHiddenColumn(t *testing.T) {
 		t.Error("fresh schema has no events.hidden column")
 	}
 }
+
+// TestMigrateAddsDeliverySeqToLegacyNotifications runs Migrate twice on a
+// notifications table from before delivery_seq existed, with rows in it:
+// the column and its unique index arrive, old rows keep NULL, and NULLs
+// never conflict with each other.
+func TestMigrateAddsDeliverySeqToLegacyNotifications(t *testing.T) {
+	ctx := context.Background()
+	db := openSQLite(t)
+
+	if _, err := db.ExecContext(ctx, `
+		CREATE TABLE events (
+			id            INTEGER PRIMARY KEY,
+			slug          TEXT NOT NULL,
+			title         TEXT NOT NULL,
+			venue         TEXT,
+			category      TEXT,
+			event_date    DATE,
+			url           TEXT NOT NULL,
+			image_url     TEXT,
+			discovered_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE TABLE notifications (
+			id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+			event_id            INTEGER NOT NULL REFERENCES events(id),
+			status              TEXT NOT NULL CHECK (status IN ('pending','sent','failed')),
+			telegram_message_id TEXT,
+			attempted_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			confirmed_at        TIMESTAMP,
+			error               TEXT,
+			triggered_by        TEXT NOT NULL DEFAULT 'scraper'
+		);
+		INSERT INTO events (id, slug, title, url) VALUES (1, 's', 't', 'u');
+		INSERT INTO notifications (event_id, status) VALUES (1, 'pending'), (1, 'sent');
+	`); err != nil {
+		t.Fatalf("create legacy tables: %v", err)
+	}
+
+	for i := 0; i < 2; i++ {
+		if err := Migrate(ctx, db); err != nil {
+			t.Fatalf("Migrate run %d: %v", i+1, err)
+		}
+	}
+
+	if !columnNames(t, db, "notifications")["delivery_seq"] {
+		t.Fatal("notifications missing delivery_seq after Migrate")
+	}
+	var nullRows int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM notifications WHERE delivery_seq IS NULL`).Scan(&nullRows); err != nil {
+		t.Fatalf("count legacy rows: %v", err)
+	}
+	if nullRows != 2 {
+		t.Errorf("legacy rows with NULL delivery_seq = %d, want 2", nullRows)
+	}
+
+	if _, err := db.ExecContext(ctx, `INSERT INTO notifications (event_id, status, delivery_seq) VALUES (1, 'pending', 7)`); err != nil {
+		t.Fatalf("insert with delivery_seq: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO notifications (event_id, status, delivery_seq) VALUES (1, 'pending', 7)`); err == nil {
+		t.Error("a second row with the same (event_id, delivery_seq) was accepted; want the unique index to reject it")
+	}
+}
+
+// TestMigrateFreshDatabaseTwiceHasDeliverySeq checks a fresh database gets
+// delivery_seq and its unique index from Schema plus Migrate, run twice.
+func TestMigrateFreshDatabaseTwiceHasDeliverySeq(t *testing.T) {
+	ctx := context.Background()
+	db := openSQLite(t)
+	for i := 0; i < 2; i++ {
+		if err := Migrate(ctx, db); err != nil {
+			t.Fatalf("Migrate run %d: %v", i+1, err)
+		}
+	}
+	if !columnNames(t, db, "notifications")["delivery_seq"] {
+		t.Fatal("notifications missing delivery_seq")
+	}
+	var unique int
+	if err := db.QueryRowContext(ctx,
+		`SELECT "unique" FROM pragma_index_list('notifications') WHERE name = 'idx_notifications_event_delivery_seq'`).Scan(&unique); err != nil {
+		t.Fatalf("read index: %v", err)
+	}
+	if unique != 1 {
+		t.Errorf("idx_notifications_event_delivery_seq unique = %d, want 1", unique)
+	}
+}

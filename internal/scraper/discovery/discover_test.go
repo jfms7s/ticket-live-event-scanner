@@ -194,7 +194,7 @@ func mustRun(t *testing.T, site *hubSite, kv seenKV, db *sql.DB, pub publisher) 
 func materialise(t *testing.T, db *sql.DB, pub *recordingPublisher) {
 	t.Helper()
 	for i := range pub.published {
-		if err := repository.UpsertEventAndInsertNotification(context.Background(), db, &pub.published[i]); err != nil {
+		if err := repository.UpsertEventAndInsertNotification(context.Background(), db, &pub.published[i], uint64(i+1)); err != nil {
 			t.Fatalf("materialise event %d: %v", pub.published[i].EventID, err)
 		}
 	}

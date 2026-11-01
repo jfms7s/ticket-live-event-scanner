@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -10,12 +11,21 @@ import (
 	"github.com/jfms7s/ticket-live-event-scanner/internal/event"
 )
 
-// UpsertEventAndInsertNotification upserts an event and inserts a pending notification.
-// This is called when an events.discovered message is received.
-// To ensure idempotency on redelivery (JetStream at-least-once delivery), we check
-// if a pending notification already exists for this event. If it does, we skip insertion
-// to avoid creating duplicate rows on message redelivery.
-func UpsertEventAndInsertNotification(ctx context.Context, db *sql.DB, disc *event.Discovered) error {
+// UpsertEventAndInsertNotification upserts an event and records the pending
+// notification for one events.discovered message. It is called by the
+// events consumer.
+//
+// deliverySeq is the EVENTS stream sequence of that message, which
+// telegram-notifier echoes back in NotificationSent/Failed. When it is
+// non-zero the row is keyed by (event_id, delivery_seq): a redelivery of the
+// same message finds its row and never adds another, and a result that
+// arrived first already created the row, whose status is left alone.
+//
+// deliverySeq 0 means the sequence is unknown (no message metadata). Then
+// the pre-delivery_seq rule applies: a ReasonDiscovered message is skipped
+// when the event already has a pending row, and a manual retry always gets
+// a new row (design.md §6.4).
+func UpsertEventAndInsertNotification(ctx context.Context, db *sql.DB, disc *event.Discovered, deliverySeq uint64) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
@@ -45,9 +55,62 @@ func UpsertEventAndInsertNotification(ctx context.Context, db *sql.DB, disc *eve
 		return fmt.Errorf("upsert event: %w", err)
 	}
 
-	// Check if a pending notification already exists for this event, but only for
-	// ReasonDiscovered (scraper redelivery). For ReasonManualRetry (user action),
-	// always create a fresh pending row per design.md §6.4.
+	// Determine triggered_by from reason
+	triggeredBy := "scraper"
+	if disc.Reason == event.ReasonManualRetry {
+		triggeredBy = "manual-retry"
+	}
+
+	if deliverySeq != 0 {
+		seq := int64(deliverySeq)
+		// A scraper message that finds a pending row from before delivery_seq
+		// existed stamps it with its sequence instead of adding a row: the
+		// old redelivery guard, kept for messages consumed by an older
+		// web-ui-api and redelivered to this one. Manual retries always get
+		// their own row.
+		if disc.Reason == event.ReasonDiscovered {
+			adopted, err := tx.ExecContext(ctx, `
+				UPDATE notifications SET delivery_seq = ?
+				WHERE id = (
+					SELECT id FROM notifications
+					WHERE event_id = ? AND status = 'pending' AND delivery_seq IS NULL
+					ORDER BY attempted_at DESC, id DESC
+					LIMIT 1
+				)
+				AND NOT EXISTS (
+					SELECT 1 FROM notifications WHERE event_id = ? AND delivery_seq = ?
+				)
+			`, seq, disc.EventID, disc.EventID, seq)
+			if err != nil {
+				return fmt.Errorf("adopt legacy pending notification: %w", err)
+			}
+			if n, err := adopted.RowsAffected(); err != nil {
+				return fmt.Errorf("rows affected: %w", err)
+			} else if n > 0 {
+				if err := tx.Commit(); err != nil {
+					return fmt.Errorf("commit transaction: %w", err)
+				}
+				return nil
+			}
+		}
+
+		// Never touch status: a result for this message may already be in.
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO notifications (event_id, status, triggered_by, attempted_at, delivery_seq)
+			VALUES (?, 'pending', ?, ?, ?)
+			ON CONFLICT(event_id, delivery_seq) DO UPDATE SET triggered_by = excluded.triggered_by
+		`, disc.EventID, triggeredBy, now, seq)
+		if err != nil {
+			return fmt.Errorf("upsert notification: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit transaction: %w", err)
+		}
+		return nil
+	}
+
+	// No sequence: skip a ReasonDiscovered message when a pending row already
+	// exists (likely a redelivery). A manual retry always gets a fresh row.
 	if disc.Reason == event.ReasonDiscovered {
 		var existingCount int
 		checkSQL := `SELECT COUNT(*) FROM notifications WHERE event_id = ? AND status = 'pending'`
@@ -55,7 +118,6 @@ func UpsertEventAndInsertNotification(ctx context.Context, db *sql.DB, disc *eve
 			return fmt.Errorf("check pending notification: %w", err)
 		}
 
-		// If a pending notification already exists, this is likely a redelivery. Skip insertion.
 		if existingCount > 0 {
 			if err := tx.Commit(); err != nil {
 				return fmt.Errorf("commit transaction: %w", err)
@@ -64,13 +126,6 @@ func UpsertEventAndInsertNotification(ctx context.Context, db *sql.DB, disc *eve
 		}
 	}
 
-	// Determine triggered_by from reason
-	triggeredBy := "scraper"
-	if disc.Reason == event.ReasonManualRetry {
-		triggeredBy = "manual-retry"
-	}
-
-	// Insert pending notification
 	insertNotifSQL := `
 		INSERT INTO notifications (event_id, status, triggered_by, attempted_at)
 		VALUES (?, 'pending', ?, ?)
@@ -88,58 +143,120 @@ func UpsertEventAndInsertNotification(ctx context.Context, db *sql.DB, disc *eve
 	return nil
 }
 
-// UpdateNotificationSent updates the most recent pending notification for an event to sent.
-// This is called when a notifications.sent message is received.
-func UpdateNotificationSent(ctx context.Context, db *sql.DB, sent *event.NotificationSent) error {
-	updateSQL := `
+// ErrEventNotMaterialized means a delivery result arrived before the
+// events consumer stored its event, so there is no row to attach it to yet.
+// The caller should redeliver it after a delay.
+var ErrEventNotMaterialized = errors.New("event not materialized yet")
+
+// notificationResult is a sent or failed delivery result to apply to the
+// notification row of one events.discovered message.
+type notificationResult struct {
+	eventID     int64
+	deliverySeq uint64
+	status      string  // "sent" or "failed"
+	messageID   *string // telegram_message_id; nil for failed
+	errMsg      *string // error; nil for sent
+	confirmedAt string
+}
+
+// applyNotificationResult records a delivery result.
+//
+// With a delivery sequence it resolves the row for that exact message:
+//  1. the row keyed by (event_id, delivery_seq), when one exists;
+//  2. otherwise the latest pending row of the event that has no
+//     delivery_seq, a row written before delivery_seq existed (or without
+//     message metadata), which it adopts by setting delivery_seq;
+//  3. otherwise a new row in the result's status, since the result arrived
+//     before its events.discovered message (that message's upsert then
+//     finds the row and leaves its status alone). When the event itself is
+//     not in the database yet, it returns ErrEventNotMaterialized and
+//     writes nothing.
+//
+// "sent" wins over "failed": a failed result never overwrites a sent row,
+// because Telegram did deliver the message.
+//
+// Limits: adoption (step 2) picks the latest legacy pending row, so while
+// rows from before delivery_seq are still pending, a result for a newer
+// message of the same event can resolve the older row; this only affects
+// the rollout window. Sequences restart if the EVENTS stream is recreated,
+// so a reused (event_id, delivery_seq) pair would match the old row.
+//
+// Without a delivery sequence (a result from a telegram-notifier that
+// predates delivery_seq) it resolves the event's latest pending row, as
+// before, and logs when there is none.
+func applyNotificationResult(ctx context.Context, db *sql.DB, r notificationResult) error {
+	if r.deliverySeq == 0 {
+		return applyLegacyNotificationResult(ctx, db, r)
+	}
+	seq := int64(r.deliverySeq)
+
+	// Steps 1 and 3 in one statement; the conflict target is the
+	// (event_id, delivery_seq) unique index. Step 2 runs first only when no
+	// row for this message exists yet.
+	adopt, err := db.ExecContext(ctx, `
 		UPDATE notifications
-		SET status = 'sent', telegram_message_id = ?, confirmed_at = ?
+		SET status = ?, telegram_message_id = ?, error = ?, confirmed_at = ?, delivery_seq = ?
 		WHERE id = (
 			SELECT id FROM notifications
-			WHERE event_id = ? AND status = 'pending'
-			ORDER BY attempted_at DESC
+			WHERE event_id = ? AND status = 'pending' AND delivery_seq IS NULL
+			ORDER BY attempted_at DESC, id DESC
 			LIMIT 1
 		)
-	`
-
-	confirmedAt := sent.SentAt.UTC().Format("2006-01-02T15:04:05Z")
-	result, err := db.ExecContext(ctx, updateSQL, sent.TelegramMessageID, confirmedAt, sent.EventID)
+		AND NOT EXISTS (
+			SELECT 1 FROM notifications WHERE event_id = ? AND delivery_seq = ?
+		)
+	`, r.status, r.messageID, r.errMsg, r.confirmedAt, seq, r.eventID, r.eventID, seq)
 	if err != nil {
-		return fmt.Errorf("update notification sent: %w", err)
+		return fmt.Errorf("adopt legacy pending notification: %w", err)
 	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
+	if n, err := adopt.RowsAffected(); err != nil {
 		return fmt.Errorf("rows affected: %w", err)
-	}
-	if rows == 0 {
-		// No pending notification found - this can happen if the notification was
-		// already marked as failed or sent, or if the event doesn't exist
-		// This is not necessarily an error, just log and continue
-		log.Printf("No pending notification found for event %d (sent status expected)", sent.EventID)
+	} else if n > 0 {
+		return nil
 	}
 
+	// Step 3 needs the event row (notifications.event_id references it, and
+	// sqld may enforce that). If the events consumer hasn't materialized the
+	// event yet, the caller retries later.
+	var eventKnown bool
+	if err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE id = ?)`, r.eventID).Scan(&eventKnown); err != nil {
+		return fmt.Errorf("check event exists: %w", err)
+	}
+	if !eventKnown {
+		return ErrEventNotMaterialized
+	}
+
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO notifications (event_id, status, telegram_message_id, error, attempted_at, confirmed_at, delivery_seq)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(event_id, delivery_seq) DO UPDATE SET
+			status = excluded.status,
+			telegram_message_id = excluded.telegram_message_id,
+			error = excluded.error,
+			confirmed_at = excluded.confirmed_at
+		WHERE NOT (excluded.status = 'failed' AND notifications.status = 'sent')
+	`, r.eventID, r.status, r.messageID, r.errMsg, r.confirmedAt, r.confirmedAt, seq)
+	if err != nil {
+		return fmt.Errorf("upsert notification %s: %w", r.status, err)
+	}
 	return nil
 }
 
-// UpdateNotificationFailed updates the most recent pending notification for an event to failed.
-// This is called when a notifications.failed message is received.
-func UpdateNotificationFailed(ctx context.Context, db *sql.DB, failed *event.NotificationFailed) error {
-	updateSQL := `
+// applyLegacyNotificationResult resolves the event's most recent pending
+// row: the matching rule for results that carry no delivery sequence.
+func applyLegacyNotificationResult(ctx context.Context, db *sql.DB, r notificationResult) error {
+	result, err := db.ExecContext(ctx, `
 		UPDATE notifications
-		SET status = 'failed', error = ?, confirmed_at = ?
+		SET status = ?, telegram_message_id = COALESCE(?, telegram_message_id), error = COALESCE(?, error), confirmed_at = ?
 		WHERE id = (
 			SELECT id FROM notifications
 			WHERE event_id = ? AND status = 'pending'
-			ORDER BY attempted_at DESC
+			ORDER BY attempted_at DESC, id DESC
 			LIMIT 1
 		)
-	`
-
-	confirmedAt := failed.FailedAt.UTC().Format("2006-01-02T15:04:05Z")
-	result, err := db.ExecContext(ctx, updateSQL, failed.Error, confirmedAt, failed.EventID)
+	`, r.status, r.messageID, r.errMsg, r.confirmedAt, r.eventID)
 	if err != nil {
-		return fmt.Errorf("update notification failed: %w", err)
+		return fmt.Errorf("update notification %s: %w", r.status, err)
 	}
 
 	rows, err := result.RowsAffected()
@@ -147,11 +264,35 @@ func UpdateNotificationFailed(ctx context.Context, db *sql.DB, failed *event.Not
 		return fmt.Errorf("rows affected: %w", err)
 	}
 	if rows == 0 {
-		// No pending notification found - similar to sent case
-		log.Printf("No pending notification found for event %d (failed status expected)", failed.EventID)
+		// Already resolved, or the event's discovered message hasn't been
+		// consumed yet; without a delivery sequence there is no row to key on.
+		log.Printf("No pending notification found for event %d (%s status expected, no delivery_seq)", r.eventID, r.status)
 	}
-
 	return nil
+}
+
+// UpdateNotificationSent records a notifications.sent result.
+func UpdateNotificationSent(ctx context.Context, db *sql.DB, sent *event.NotificationSent) error {
+	messageID := sent.TelegramMessageID
+	return applyNotificationResult(ctx, db, notificationResult{
+		eventID:     sent.EventID,
+		deliverySeq: sent.DeliverySeq,
+		status:      "sent",
+		messageID:   &messageID,
+		confirmedAt: sent.SentAt.UTC().Format("2006-01-02T15:04:05Z"),
+	})
+}
+
+// UpdateNotificationFailed records a notifications.failed result.
+func UpdateNotificationFailed(ctx context.Context, db *sql.DB, failed *event.NotificationFailed) error {
+	errMsg := failed.Error
+	return applyNotificationResult(ctx, db, notificationResult{
+		eventID:     failed.EventID,
+		deliverySeq: failed.DeliverySeq,
+		status:      "failed",
+		errMsg:      &errMsg,
+		confirmedAt: failed.FailedAt.UTC().Format("2006-01-02T15:04:05Z"),
+	})
 }
 
 // GetNotificationsForEvent returns all notifications for a given event (without event_id field),
