@@ -11,6 +11,7 @@ import (
 	"log"
 
 	"github.com/jfms7s/ticket-live-event-scanner/internal/event"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/notifier/policy"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/streams"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/webui/repository"
 	"github.com/nats-io/nats.go/jetstream"
@@ -66,7 +67,7 @@ func ConsumeEventsDiscovered(ctx context.Context, consumer jetstream.Consumer, d
 }
 
 // handleDiscovered materializes one events.discovered message and acks,
-// naks or terminates it. The message's EVENTS stream sequence becomes the
+// naks (with backoff, see retryOnDBError) or terminates it. The message's EVENTS stream sequence becomes the
 // notification row's delivery_seq; without metadata it is 0 (unknown).
 func handleDiscovered(ctx context.Context, db *sql.DB, msg jetstream.Msg) {
 	var disc event.Discovered
@@ -86,10 +87,41 @@ func handleDiscovered(ctx context.Context, db *sql.DB, msg jetstream.Msg) {
 
 	// Upsert event and insert pending notification in a transaction
 	if err := repository.UpsertEventAndInsertNotification(ctx, db, &disc, deliverySeq); err != nil {
-		log.Printf("Failed to materialize event %d: %v", disc.EventID, err)
-		msg.Nak()
+		retryOnDBError(msg, "materialize event", disc.EventID, err)
 		return
 	}
 
-	msg.Ack()
+	ack(msg)
+}
+
+// retryOnDBError redelivers msg after a database error with the notifiers'
+// linear backoff (5s × delivery number), so a short database outage is
+// ridden out instead of burning every delivery in milliseconds. The last
+// allowed delivery is logged as an ERROR and terminated. Without metadata
+// the delivery is taken as the first.
+func retryOnDBError(msg jetstream.Msg, what string, eventID int64, cause error) {
+	delivered := 1
+	if meta, err := msg.Metadata(); err == nil && meta.NumDelivered > 0 {
+		delivered = int(meta.NumDelivered)
+	}
+	if policy.DecideAction(delivered, streams.EventsConsumerMaxDeliver) == policy.ActionTerm {
+		log.Printf("ERROR giving up on %s for event %d after %d deliveries: %s: %v", msg.Subject(), eventID, delivered, what, cause)
+		if err := msg.Term(); err != nil {
+			log.Printf("Error terminating %s for event %d: %v", msg.Subject(), eventID, err)
+		}
+		return
+	}
+	delay := policy.BackoffDelay(delivered)
+	log.Printf("Failed to %s for event %d (delivery %d), retrying in %v: %v", what, eventID, delivered, delay, cause)
+	if err := msg.NakWithDelay(delay); err != nil {
+		log.Printf("Error nak'ing %s for event %d: %v", msg.Subject(), eventID, err)
+	}
+}
+
+// ack acks msg, logging a failure (the message is then redelivered after
+// AckWait).
+func ack(msg jetstream.Msg) {
+	if err := msg.Ack(); err != nil {
+		log.Printf("Error acking %s: %v", msg.Subject(), err)
+	}
 }

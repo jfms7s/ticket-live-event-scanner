@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -32,6 +33,8 @@ type fakeMsg struct {
 	metaErr error
 
 	acks, naks, terms int
+	plainNaks         int             // Nak() without a delay
+	nakDelays         []time.Duration // NakWithDelay() delays, in order
 }
 
 func (m *fakeMsg) Metadata() (*jetstream.MsgMetadata, error) {
@@ -43,17 +46,21 @@ func (m *fakeMsg) Metadata() (*jetstream.MsgMetadata, error) {
 	}
 	return &jetstream.MsgMetadata{}, nil
 }
-func (m *fakeMsg) Data() []byte                     { return m.data }
-func (m *fakeMsg) Headers() nats.Header             { return nil }
-func (m *fakeMsg) Subject() string                  { return m.subject }
-func (m *fakeMsg) Reply() string                    { return "" }
-func (m *fakeMsg) Ack() error                       { m.acks++; return nil }
-func (m *fakeMsg) DoubleAck(context.Context) error  { m.acks++; return nil }
-func (m *fakeMsg) Nak() error                       { m.naks++; return nil }
-func (m *fakeMsg) NakWithDelay(time.Duration) error { m.naks++; return nil }
-func (m *fakeMsg) InProgress() error                { return nil }
-func (m *fakeMsg) Term() error                      { m.terms++; return nil }
-func (m *fakeMsg) TermWithReason(string) error      { m.terms++; return nil }
+func (m *fakeMsg) Data() []byte                    { return m.data }
+func (m *fakeMsg) Headers() nats.Header            { return nil }
+func (m *fakeMsg) Subject() string                 { return m.subject }
+func (m *fakeMsg) Reply() string                   { return "" }
+func (m *fakeMsg) Ack() error                      { m.acks++; return nil }
+func (m *fakeMsg) DoubleAck(context.Context) error { m.acks++; return nil }
+func (m *fakeMsg) Nak() error                      { m.naks++; m.plainNaks++; return nil }
+func (m *fakeMsg) NakWithDelay(d time.Duration) error {
+	m.naks++
+	m.nakDelays = append(m.nakDelays, d)
+	return nil
+}
+func (m *fakeMsg) InProgress() error           { return nil }
+func (m *fakeMsg) Term() error                 { m.terms++; return nil }
+func (m *fakeMsg) TermWithReason(string) error { m.terms++; return nil }
 
 func (m *fakeMsg) assertCalls(t *testing.T, acks, naks, terms int) {
 	t.Helper()
@@ -170,13 +177,57 @@ func TestMalformedEmailResultsAreTerminated(t *testing.T) {
 	}
 }
 
-func TestEmailResultNaksWhenDBFails(t *testing.T) {
+// atDelivery sets the delivery count JetStream reports for m.
+func (m *fakeMsg) atDelivery(n uint64) *fakeMsg {
+	m.meta = &jetstream.MsgMetadata{NumDelivered: n}
+	return m
+}
+
+// assertNakDelay checks m was nak'd exactly once, with delay d.
+func (m *fakeMsg) assertNakDelay(t *testing.T, d time.Duration) {
+	t.Helper()
+	if m.plainNaks != 0 || len(m.nakDelays) != 1 || m.nakDelays[0] != d {
+		t.Fatalf("plain naks = %d, nak delays = %v, want one NakWithDelay(%v)", m.plainNaks, m.nakDelays, d)
+	}
+}
+
+// A database error is retried with the linear backoff (5s at the first
+// delivery), and the last allowed delivery is terminated, for every
+// subject the notifications consumer writes to the database.
+func TestNotificationDBErrorBacksOffThenTerminates(t *testing.T) {
+	db := setupDB(t)
+	db.Close()
+
+	results := map[string]any{
+		streams.NotificationsSentSubject:      event.NotificationSent{EventID: 1, TelegramMessageID: "42", SentAt: time.Now(), DeliverySeq: 7},
+		streams.NotificationsFailSubject:      event.NotificationFailed{EventID: 1, Error: "x", FailedAt: time.Now(), DeliverySeq: 7},
+		streams.NotificationsEmailSentSubject: event.EmailSent{EventID: 1},
+		streams.NotificationsEmailFailSubject: event.EmailFailed{EventID: 1, Error: "x"},
+	}
+	for subject, body := range results {
+		t.Run(subject, func(t *testing.T) {
+			first := jsonMsg(t, subject, body).atDelivery(1)
+			handleNotification(context.Background(), db, first)
+			first.assertCalls(t, 0, 1, 0)
+			first.assertNakDelay(t, 5*time.Second)
+
+			last := jsonMsg(t, subject, body).atDelivery(streams.EventsConsumerMaxDeliver)
+			handleNotification(context.Background(), db, last)
+			last.assertCalls(t, 0, 0, 1)
+		})
+	}
+}
+
+// Without metadata the delivery count is taken as 1.
+func TestNotificationDBErrorWithoutMetadataBacksOff(t *testing.T) {
 	db := setupDB(t)
 	db.Close()
 
 	msg := jsonMsg(t, streams.NotificationsEmailFailSubject, event.EmailFailed{EventID: 1, Error: "x"})
+	msg.metaErr = errors.New("no metadata")
 	handleNotification(context.Background(), db, msg)
 	msg.assertCalls(t, 0, 1, 0)
+	msg.assertNakDelay(t, 5*time.Second)
 }
 
 func TestTelegramResultsStillHandled(t *testing.T) {

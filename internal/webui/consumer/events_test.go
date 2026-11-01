@@ -96,3 +96,37 @@ func TestMaterializeRetryDelay(t *testing.T) {
 		}
 	}
 }
+
+// A database error is retried with the linear backoff (5s at the first
+// delivery, 10s at the second), and the last allowed delivery is
+// terminated with an ERROR log instead of being dropped silently.
+func TestDiscoveredDBErrorBacksOffThenTerminates(t *testing.T) {
+	db := setupDB(t)
+	db.Close()
+
+	for _, tc := range []struct {
+		delivered uint64
+		delay     time.Duration
+	}{{1, 5 * time.Second}, {2, 10 * time.Second}} {
+		m := discoveredMsg(t, 1, 9)
+		m.meta.NumDelivered = tc.delivered
+		handleDiscovered(context.Background(), db, m)
+		m.assertCalls(t, 0, 1, 0)
+		m.assertNakDelay(t, tc.delay)
+	}
+
+	last := discoveredMsg(t, 1, 9)
+	last.meta.NumDelivered = streams.EventsConsumerMaxDeliver
+	handleDiscovered(context.Background(), db, last)
+	last.assertCalls(t, 0, 0, 1)
+}
+
+func TestDiscoveredSuccessIsAcked(t *testing.T) {
+	db := setupDB(t)
+	m := discoveredMsg(t, 1, 3)
+	handleDiscovered(context.Background(), db, m)
+	m.assertCalls(t, 1, 0, 0)
+	if m.plainNaks != 0 || len(m.nakDelays) != 0 {
+		t.Fatalf("unexpected naks on success: %d plain, %v delayed", m.plainNaks, m.nakDelays)
+	}
+}
