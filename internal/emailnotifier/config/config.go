@@ -9,8 +9,12 @@ type Config struct {
 	SMTPPort     int
 	SMTPUsername string
 	SMTPPassword string
-	EmailFrom    string
-	EmailTo      []string
+	// SMTPAllowPlaintext lets the client send without TLS when the server
+	// doesn't offer STARTTLS (SMTP_ALLOW_PLAINTEXT=true or 1). Local
+	// testing only; off by default.
+	SMTPAllowPlaintext bool
+	EmailFrom          string
+	EmailTo            []string
 }
 
 // Load builds a Config from environment variables, applying defaults where
@@ -18,12 +22,13 @@ type Config struct {
 // variable is missing.
 func Load() Config {
 	return Config{
-		NatsURL:      getEnv("NATS_URL", "nats://localhost:4222"),
-		SMTPHost:     getEnvRequired("SMTP_HOST"),
-		SMTPPort:     getEnvInt("SMTP_PORT", 587),
-		SMTPUsername: getEnvRequired("SMTP_USERNAME"),
-		SMTPPassword: getEnvRequired("SMTP_PASSWORD"),
-		EmailFrom:    getEnvRequired("EMAIL_FROM"),
-		EmailTo:      getEnvList("EMAIL_TO"),
+		NatsURL:            getEnv("NATS_URL", "nats://localhost:4222"),
+		SMTPHost:           getEnvRequired("SMTP_HOST"),
+		SMTPPort:           getEnvInt("SMTP_PORT", 587),
+		SMTPUsername:       getEnvRequired("SMTP_USERNAME"),
+		SMTPPassword:       getEnvRequired("SMTP_PASSWORD"),
+		SMTPAllowPlaintext: getEnvBool("SMTP_ALLOW_PLAINTEXT"),
+		EmailFrom:          getEnvRequired("EMAIL_FROM"),
+		EmailTo:            getEnvList("EMAIL_TO"),
 	}
 }

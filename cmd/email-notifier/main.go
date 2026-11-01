@@ -53,6 +53,8 @@ func main() {
 		Username: cfg.SMTPUsername,
 		Password: cfg.SMTPPassword,
 		From:     cfg.EmailFrom,
+
+		AllowPlaintext: cfg.SMTPAllowPlaintext,
 	}
 	h := emailhandler.New(smtpCfg, cfg.EmailTo, js)
 
