@@ -68,3 +68,13 @@ func TestSeenBucketConfig(t *testing.T) {
 		t.Errorf("Storage = %v, want file storage", cfg.Storage)
 	}
 }
+
+func TestSkippedBucketConfig(t *testing.T) {
+	cfg := SkippedBucketConfig()
+	if cfg.Bucket != SkippedBucketName || cfg.Bucket == SeenBucketName {
+		t.Errorf("Bucket = %q, want %q (not the seen bucket)", cfg.Bucket, SkippedBucketName)
+	}
+	if cfg.TTL != 24*time.Hour {
+		t.Errorf("TTL = %v, want 24h: a rejected session is retried about once a day", cfg.TTL)
+	}
+}

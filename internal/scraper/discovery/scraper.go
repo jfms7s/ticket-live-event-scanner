@@ -24,7 +24,11 @@ const httpTimeout = 15 * time.Second
 type Stats struct {
 	EventsFound     int
 	EventsPublished int
-	Errors          int
+	// Skipped counts sessions not fetched or not published because of a
+	// per-session data problem (see errSkip): rejected this run, or
+	// rejected by an earlier run less than a day ago.
+	Skipped int
+	Errors  int
 }
 
 // publisher is the part of jetstream.JetStream the scraper uses.
@@ -51,14 +55,21 @@ type Scraper struct {
 	seen     seenStore
 	pub      publisher
 	knownIDs map[int64]bool
+	skipped  skipStore
+	skipIDs  map[int64]bool
 	Stats    Stats
 }
 
 // New constructs a Scraper that publishes through js and keeps its seen
 // set in the seen KV bucket (see streams.EnsureSeenBucket), also reading
 // the IDs already in web-ui-api's events table from db.
-func New(cfg config.Config, db *sql.DB, js jetstream.JetStream, seen jetstream.KeyValue) *Scraper {
-	return newScraper(cfg, baseURL, newSeenStore(seen, db), js)
+//
+// skipped is the skipped bucket (see streams.EnsureSkippedBucket): sessions
+// the parser rejected, which later runs leave alone until the key expires.
+func New(cfg config.Config, db *sql.DB, js jetstream.JetStream, seen, skipped jetstream.KeyValue) *Scraper {
+	s := newScraper(cfg, baseURL, newSeenStore(seen, db), js)
+	s.skipped = newSkipStore(skipped)
+	return s
 }
 
 // newScraper builds a Scraper that fetches from site (baseURL in
@@ -71,5 +82,7 @@ func newScraper(cfg config.Config, site string, seen seenStore, pub publisher) *
 		seen:     seen,
 		pub:      pub,
 		knownIDs: make(map[int64]bool),
+		skipped:  noSkipStore{},
+		skipIDs:  make(map[int64]bool),
 	}
 }

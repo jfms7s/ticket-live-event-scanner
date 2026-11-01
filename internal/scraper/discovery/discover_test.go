@@ -29,11 +29,15 @@ type hubSite struct {
 	mu  sync.Mutex
 	ids []int64
 	srv *httptest.Server
+	// detail overrides the detail page for an event ID.
+	detail map[int64]http.HandlerFunc
+	// detailFetches counts requests per detail page.
+	detailFetches map[int64]int
 }
 
 func newHubSite(t *testing.T, ids ...int64) *hubSite {
 	t.Helper()
-	h := &hubSite{ids: ids}
+	h := &hubSite{ids: ids, detail: map[int64]http.HandlerFunc{}, detailFetches: map[int64]int{}}
 	h.srv = httptest.NewServer(http.HandlerFunc(h.serve))
 	t.Cleanup(h.srv.Close)
 	return h
@@ -72,6 +76,15 @@ func (h *hubSite) serve(w http.ResponseWriter, r *http.Request) {
 	idStr, ok := strings.CutPrefix(slug, "session-")
 	if !ok {
 		http.NotFound(w, r)
+		return
+	}
+	id, _ := strconv.ParseInt(idStr, 10, 64)
+	h.mu.Lock()
+	h.detailFetches[id]++
+	override := h.detail[id]
+	h.mu.Unlock()
+	if override != nil {
+		override(w, r)
 		return
 	}
 	fmt.Fprintf(w, `<html><body><div itemscope itemtype="http://schema.org/Event">

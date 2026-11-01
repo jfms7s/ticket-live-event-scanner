@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -68,10 +69,18 @@ func (s *Scraper) fetchHubPage(ctx context.Context, hubSlug string, hubID int64)
 		if s.knownIDs[sess.EventID] {
 			continue
 		}
+		if s.skipIDs[sess.EventID] {
+			// Rejected by this run or a recent one; retried once its
+			// skipped-bucket key expires.
+			s.Stats.Skipped++
+			continue
+		}
 
 		time.Sleep(time.Duration(s.cfg.RequestDelayMS) * time.Millisecond)
 
-		if err := s.fetchAndPublishEvent(ctx, sess); err != nil {
+		if err := s.fetchAndPublishEvent(ctx, sess); errors.Is(err, errSkip) {
+			s.skip(ctx, sess.EventID, err)
+		} else if err != nil {
 			log.Printf("Error fetching detail for hub session event %d: %v", sess.EventID, err)
 			errorCount++
 		}
