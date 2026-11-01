@@ -1,4 +1,4 @@
-// Package parse extracts event data from ticketline.pt search/hub pages,
+// Package parse extracts event data from ticketline.pt hub pages,
 // event detail pages, and event URLs.
 package parse
 

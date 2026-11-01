@@ -45,9 +45,10 @@ func (s *Scraper) Discover(ctx context.Context) error {
 	return nil
 }
 
-// fetchHubPage fetches a venue/series hub page (the project design doc (kept outside this repo), §4/§6.1 — the two
-// example URLs are hub pages, not single events) and discovers new session
-// links on it using the same schema.org/Event card parsing as search pages.
+// fetchHubPage fetches a venue/series hub page (the project design doc,
+// kept outside this repo, §4/§6.1: the two example URLs are hub pages, not
+// single events) and discovers new session links on it with
+// parse.ParseHubSessions, which ignores the similar-events widget.
 func (s *Scraper) fetchHubPage(ctx context.Context, hubSlug string, hubID int64) error {
 	hubURL := fmt.Sprintf("%s/evento/%s", s.baseURL, hubSlug)
 	body, err := s.fetcher.Fetch(ctx, hubURL, s.baseURL)
@@ -55,7 +56,7 @@ func (s *Scraper) fetchHubPage(ctx context.Context, hubSlug string, hubID int64)
 		return fmt.Errorf("fetch hub page %d: %w", hubID, err)
 	}
 
-	sessions, err := parse.ParseSearchPage(body)
+	sessions, err := parse.ParseHubSessions(body)
 	if err != nil {
 		return fmt.Errorf("parse hub page %d: %w", hubID, err)
 	}

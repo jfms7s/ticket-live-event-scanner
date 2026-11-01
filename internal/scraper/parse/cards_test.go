@@ -2,7 +2,7 @@ package parse
 
 import "testing"
 
-func TestParseSearchPageNormalEvent(t *testing.T) {
+func TestParseHubSessionsNormalEvent(t *testing.T) {
 	html := `<!DOCTYPE html>
 <html>
 <body>
@@ -22,9 +22,9 @@ func TestParseSearchPageNormalEvent(t *testing.T) {
 </body>
 </html>`
 
-	events, err := ParseSearchPage(html)
+	events, err := ParseHubSessions(html)
 	if err != nil {
-		t.Fatalf("ParseSearchPage failed: %v", err)
+		t.Fatalf("ParseHubSessions failed: %v", err)
 	}
 
 	if len(events) != 1 {
@@ -55,13 +55,13 @@ func TestParseSearchPageNormalEvent(t *testing.T) {
 	}
 }
 
-// TestParseSearchPageLazyLoadedImage reproduces the real ticketline.pt card
+// TestParseHubSessionsLazyLoadedImage reproduces the real ticketline.pt card
 // markup, where itemprop="image" sits on an <img> that's lazy-loaded: its
 // src is a generic "/static/img/blank.png" placeholder, and the real poster
 // URL only lives in data-src-original. Using src directly (the previous
 // behavior) meant every scraped event pointed at the same blank placeholder
 // instead of its actual poster.
-func TestParseSearchPageLazyLoadedImage(t *testing.T) {
+func TestParseHubSessionsLazyLoadedImage(t *testing.T) {
 	body := `<!DOCTYPE html>
 <html>
 <body>
@@ -74,9 +74,9 @@ func TestParseSearchPageLazyLoadedImage(t *testing.T) {
 </body>
 </html>`
 
-	events, err := ParseSearchPage(body)
+	events, err := ParseHubSessions(body)
 	if err != nil {
-		t.Fatalf("ParseSearchPage failed: %v", err)
+		t.Fatalf("ParseHubSessions failed: %v", err)
 	}
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
@@ -88,7 +88,7 @@ func TestParseSearchPageLazyLoadedImage(t *testing.T) {
 	}
 }
 
-func TestParseSearchPageMissingOptionalFields(t *testing.T) {
+func TestParseHubSessionsMissingOptionalFields(t *testing.T) {
 	html := `<!DOCTYPE html>
 <html>
 <body>
@@ -100,9 +100,9 @@ func TestParseSearchPageMissingOptionalFields(t *testing.T) {
 </body>
 </html>`
 
-	events, err := ParseSearchPage(html)
+	events, err := ParseHubSessions(html)
 	if err != nil {
-		t.Fatalf("ParseSearchPage failed: %v", err)
+		t.Fatalf("ParseHubSessions failed: %v", err)
 	}
 
 	if len(events) != 1 {
@@ -127,7 +127,7 @@ func TestParseSearchPageMissingOptionalFields(t *testing.T) {
 	}
 }
 
-func TestParseSearchPageEmptyPage(t *testing.T) {
+func TestParseHubSessionsEmptyPage(t *testing.T) {
 	html := `<!DOCTYPE html>
 <html>
 <body>
@@ -135,9 +135,9 @@ func TestParseSearchPageEmptyPage(t *testing.T) {
 </body>
 </html>`
 
-	events, err := ParseSearchPage(html)
+	events, err := ParseHubSessions(html)
 	if err != nil {
-		t.Fatalf("ParseSearchPage failed: %v", err)
+		t.Fatalf("ParseHubSessions failed: %v", err)
 	}
 
 	if len(events) != 0 {
@@ -145,7 +145,7 @@ func TestParseSearchPageEmptyPage(t *testing.T) {
 	}
 }
 
-func TestParseSearchPageMultipleEvents(t *testing.T) {
+func TestParseHubSessionsMultipleEvents(t *testing.T) {
 	html := `<!DOCTYPE html>
 <html>
 <body>
@@ -162,9 +162,9 @@ func TestParseSearchPageMultipleEvents(t *testing.T) {
 </body>
 </html>`
 
-	events, err := ParseSearchPage(html)
+	events, err := ParseHubSessions(html)
 	if err != nil {
-		t.Fatalf("ParseSearchPage failed: %v", err)
+		t.Fatalf("ParseHubSessions failed: %v", err)
 	}
 
 	if len(events) != 2 {
@@ -176,7 +176,7 @@ func TestParseSearchPageMultipleEvents(t *testing.T) {
 	}
 }
 
-func TestParseSearchPageNestedStructure(t *testing.T) {
+func TestParseHubSessionsNestedStructure(t *testing.T) {
 	// Test with deeper nesting that matches real-world HTML
 	html := `<!DOCTYPE html>
 <html>
@@ -207,9 +207,9 @@ func TestParseSearchPageNestedStructure(t *testing.T) {
 </body>
 </html>`
 
-	events, err := ParseSearchPage(html)
+	events, err := ParseHubSessions(html)
 	if err != nil {
-		t.Fatalf("ParseSearchPage failed: %v", err)
+		t.Fatalf("ParseHubSessions failed: %v", err)
 	}
 
 	if len(events) != 1 {
@@ -225,7 +225,7 @@ func TestParseSearchPageNestedStructure(t *testing.T) {
 	}
 }
 
-func TestParseSearchPageInvalidEventURL(t *testing.T) {
+func TestParseHubSessionsInvalidEventURL(t *testing.T) {
 	html := `<!DOCTYPE html>
 <html>
 <body>
@@ -237,13 +237,76 @@ func TestParseSearchPageInvalidEventURL(t *testing.T) {
 </body>
 </html>`
 
-	events, err := ParseSearchPage(html)
+	events, err := ParseHubSessions(html)
 	if err != nil {
-		t.Fatalf("ParseSearchPage failed: %v", err)
+		t.Fatalf("ParseHubSessions failed: %v", err)
 	}
 
 	// Events with invalid URLs (ID = 0) are skipped
 	if len(events) != 0 {
 		t.Fatalf("expected 0 events (invalid URL), got %d", len(events))
+	}
+}
+
+// hubCard renders a fully populated schema.org/Event card, as both the
+// hub's session list and its similar-events widget use.
+func hubCard(id, slug, name string) string {
+	return `<li itemscope itemtype="http://schema.org/Event">
+	<a itemprop="url" href="/evento/` + slug + `-` + id + `">
+		<img itemprop="image" src="https://info.ticketline.pt/images/Espectaculos/` + id + `/cartaz.jpg" />
+		<h3 itemprop="name">` + name + `</h3>
+		<span itemprop="location">Coliseu Porto</span>
+		<span itemprop="startDate" content="2026-09-01T21:00">1 de Setembro</span>
+	</a>
+</li>`
+}
+
+func TestParseHubSessionsSkipsSimilarEventsWidget(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		widgetClass string
+	}{
+		{"widget class alone", "similar_events"},
+		{"widget class among others", "box similar_events clearfix"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := `<!DOCTYPE html><html><body>
+<ul class="sessions">` +
+				hubCard("1001", "show-porto", "Show | Porto") +
+				hubCard("1002", "show-lisboa", "Show | Lisboa") + `
+</ul>
+<div class="` + tc.widgetClass + `">
+	<ul>` +
+				hubCard("2001", "other-show", "Other Show") +
+				hubCard("2002", "another-show", "Another Show") + `
+	</ul>
+</div>
+</body></html>`
+
+			events, err := ParseHubSessions(body)
+			if err != nil {
+				t.Fatalf("ParseHubSessions failed: %v", err)
+			}
+			var ids []int64
+			for _, e := range events {
+				ids = append(ids, e.EventID)
+			}
+			if len(ids) != 2 || ids[0] != 1001 || ids[1] != 1002 {
+				t.Errorf("got event IDs %v, want [1001 1002]", ids)
+			}
+		})
+	}
+}
+
+// A class that only contains "similar_events" as a substring is not the
+// widget, so its cards are kept.
+func TestParseHubSessionsMatchesWholeClassToken(t *testing.T) {
+	body := `<div class="not_similar_events_list"><ul>` + hubCard("3001", "x", "X") + `</ul></div>`
+	events, err := ParseHubSessions(body)
+	if err != nil {
+		t.Fatalf("ParseHubSessions failed: %v", err)
+	}
+	if len(events) != 1 || events[0].EventID != 3001 {
+		t.Errorf("got %+v, want one event 3001", events)
 	}
 }
