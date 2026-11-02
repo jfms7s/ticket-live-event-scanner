@@ -3,18 +3,15 @@ package health
 import (
 	"context"
 	"fmt"
-	"os"
 
+	"github.com/jfms7s/ticket-live-event-scanner/internal/envconfig"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
 // File returns HEALTH_FILE, or DefaultFile when it is unset.
 func File() string {
-	if p := os.Getenv("HEALTH_FILE"); p != "" {
-		return p
-	}
-	return DefaultFile
+	return envconfig.String("HEALTH_FILE", DefaultFile)
 }
 
 // consumerInfo is the part of jetstream.Consumer the check needs.

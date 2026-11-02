@@ -12,6 +12,7 @@ import (
 	"github.com/jfms7s/ticket-live-event-scanner/internal/notifier/handler"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/shutdown"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/streams"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/telegramnotifier/config"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -25,24 +26,10 @@ const drainTimeout = 25 * time.Second
 const healthInterval = 15 * time.Second
 
 func main() {
-	// Load environment variables
-	natsURL := os.Getenv("NATS_URL")
-	if natsURL == "" {
-		natsURL = "nats://localhost:4222"
-	}
-
-	telegramBotToken := os.Getenv("TELEGRAM_BOT_TOKEN")
-	if telegramBotToken == "" {
-		log.Fatal("TELEGRAM_BOT_TOKEN environment variable is required")
-	}
-
-	telegramChatID := os.Getenv("TELEGRAM_CHAT_ID")
-	if telegramChatID == "" {
-		log.Fatal("TELEGRAM_CHAT_ID environment variable is required")
-	}
+	cfg := config.Load()
 
 	// Connect to NATS
-	nc, err := nats.Connect(natsURL)
+	nc, err := nats.Connect(cfg.NatsURL)
 	if err != nil {
 		log.Fatalf("Failed to connect to NATS: %v", err)
 	}
@@ -64,20 +51,15 @@ func main() {
 	}
 
 	// Get or create consumer
-	consumer, err := streams.EnsureEventsConsumer(ctx, js)
+	consumer, err := streams.EnsureConsumer(ctx, js, streams.TelegramConsumer())
 	if err != nil {
 		log.Fatalf("Failed to ensure consumer: %v", err)
 	}
 
-	minSendInterval, err := handler.ParseMinSendInterval(os.Getenv("TELEGRAM_MIN_SEND_INTERVAL"))
-	if err != nil {
-		log.Fatal(err)
-	}
-
 	// Create handler
-	h := handler.New(telegramBotToken, telegramChatID, js)
-	h.SetMinSendInterval(minSendInterval)
-	log.Printf("Minimum interval between Telegram sends: %v", minSendInterval)
+	h := handler.New(cfg.BotToken, cfg.ChatID, js)
+	h.SetMinSendInterval(cfg.MinSendInterval)
+	log.Printf("Minimum interval between Telegram sends: %v", cfg.MinSendInterval)
 
 	// Setup signal handling for graceful shutdown
 	sigChan := make(chan os.Signal, 1)

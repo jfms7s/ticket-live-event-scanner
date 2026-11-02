@@ -25,6 +25,7 @@ import (
 	"github.com/jfms7s/ticket-live-event-scanner/internal/store"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/streams"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/webui/api"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/webui/config"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/webui/consumer"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -40,32 +41,13 @@ const (
 )
 
 func main() {
-	// Environment setup
-	natsURL := os.Getenv("NATS_URL")
-	if natsURL == "" {
-		natsURL = "nats://localhost:4222"
-	}
-	tursoURL := os.Getenv("TURSO_DATABASE_URL")
-	tursoToken := os.Getenv("TURSO_AUTH_TOKEN")
-	if tursoURL == "" || tursoToken == "" {
-		log.Fatal("TURSO_DATABASE_URL and TURSO_AUTH_TOKEN are required")
-	}
-	listenAddr := os.Getenv("LISTEN_ADDR")
-	if listenAddr == "" {
-		listenAddr = ":8080"
-	}
-	corsOrigin := os.Getenv("CORS_ORIGIN")
-	if corsOrigin == "" {
-		// Default to empty (no CORS) for cluster-internal safety
-		// If frontend needs CORS, set CORS_ORIGIN=http://web-ui-frontend:3000 or similar
-		corsOrigin = ""
-	}
+	cfg := config.Load()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// Connect to Turso
-	db, err := store.Connect(tursoURL, tursoToken)
+	db, err := store.Connect(cfg.TursoDatabaseURL, cfg.TursoAuthToken)
 	if err != nil {
 		log.Fatalf("Failed to connect to Turso: %v", err)
 	}
@@ -77,7 +59,7 @@ func main() {
 	}
 
 	// Connect to NATS
-	nc, err := nats.Connect(natsURL)
+	nc, err := nats.Connect(cfg.NatsURL)
 	if err != nil {
 		log.Fatalf("Failed to connect to NATS: %v", err)
 	}
@@ -96,13 +78,13 @@ func main() {
 
 	// Create durable consumers for web-ui-api
 	// Consumer for events.discovered
-	eventConsumer, err := consumer.CreateOrUpdateEventsConsumer(ctx, js)
+	eventConsumer, err := streams.EnsureConsumer(ctx, js, streams.WebUIEventsConsumer())
 	if err != nil {
 		log.Fatalf("Failed to create events consumer: %v", err)
 	}
 
 	// Consumer for Telegram and email delivery results
-	notifConsumer, err := consumer.CreateOrUpdateNotificationsConsumer(ctx, js)
+	notifConsumer, err := streams.EnsureConsumer(ctx, js, streams.WebUINotificationsConsumer())
 	if err != nil {
 		log.Fatalf("Failed to create notifications consumer: %v", err)
 	}
@@ -131,16 +113,16 @@ func main() {
 
 	// Setup HTTP server
 	app := api.NewApp(db, js)
-	if corsOrigin == "*" {
+	if cfg.CORSOrigin == "*" {
 		log.Println("WARNING: CORS_ORIGIN=* lets any website call mutating endpoints; set it to the dashboard origin")
 	}
 	// CORS outermost, so preflights are answered before the header check.
-	handler := api.CORSMiddleware(api.RequireCustomHeader(app.NewMux()), corsOrigin)
+	handler := api.CORSMiddleware(api.RequireCustomHeader(app.NewMux()), cfg.CORSOrigin)
 
 	// Timeouts keep a slow or idle client from holding connections open
 	// on a small pod.
 	server := &http.Server{
-		Addr:              listenAddr,
+		Addr:              cfg.ListenAddr,
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
@@ -150,7 +132,7 @@ func main() {
 
 	// Start server in a goroutine
 	go func() {
-		log.Printf("Starting HTTP server on %s", listenAddr)
+		log.Printf("Starting HTTP server on %s", cfg.ListenAddr)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server error: %v", err)
 		}

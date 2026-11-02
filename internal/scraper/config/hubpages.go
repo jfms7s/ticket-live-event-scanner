@@ -2,16 +2,17 @@ package config
 
 import (
 	"net/url"
-	"os"
 	"strings"
+
+	"github.com/jfms7s/ticket-live-event-scanner/internal/envconfig"
 )
 
-// getEnvHubPages reads a comma-separated list of hub pages from the given
+// hubPagesFromEnv reads a comma-separated list of hub pages from the given
 // env var, accepting either full URLs or bare slugs (see hubPageSlug).
 // Falls back to defaultVal if the env var is unset or contains no usable
 // entries.
-func getEnvHubPages(key string, defaultVal []string) []string {
-	val := os.Getenv(key)
+func hubPagesFromEnv(key string, defaultVal []string) []string {
+	val := envconfig.String(key, "")
 	if val == "" {
 		return defaultVal
 	}

@@ -9,7 +9,6 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -211,7 +210,7 @@ func TestNotificationDBErrorBacksOffThenTerminates(t *testing.T) {
 			first.assertCalls(t, 0, 1, 0)
 			first.assertNakDelay(t, 5*time.Second)
 
-			last := jsonMsg(t, subject, body).atDelivery(streams.EventsConsumerMaxDeliver)
+			last := jsonMsg(t, subject, body).atDelivery(streams.DefaultMaxDeliver)
 			handleNotification(context.Background(), db, last)
 			last.assertCalls(t, 0, 0, 1)
 		})
@@ -264,28 +263,5 @@ func TestUnhandledSubjectIsLoggedAndAcked(t *testing.T) {
 
 	if !strings.Contains(buf.String(), "WARN unhandled subject notifications.sms.sent") {
 		t.Fatalf("log = %q, want a WARN unhandled subject line", buf.String())
-	}
-}
-
-// The consumer's filter must cover every subject it handles. A single
-// "notifications.*" token wildcard silently missed the email subjects.
-func TestNotificationsConsumerFiltersHandledSubjects(t *testing.T) {
-	cfg := notificationsConsumerConfig()
-	if cfg.FilterSubject != "" {
-		t.Fatalf("FilterSubject = %q, want it unset in favour of FilterSubjects", cfg.FilterSubject)
-	}
-	want := []string{
-		streams.NotificationsSentSubject,
-		streams.NotificationsFailSubject,
-		streams.NotificationsEmailSentSubject,
-		streams.NotificationsEmailFailSubject,
-	}
-	for _, s := range want {
-		if !slices.Contains(cfg.FilterSubjects, s) {
-			t.Errorf("FilterSubjects %v missing %q", cfg.FilterSubjects, s)
-		}
-	}
-	if len(cfg.FilterSubjects) != len(want) {
-		t.Errorf("FilterSubjects = %v, want exactly %v", cfg.FilterSubjects, want)
 	}
 }

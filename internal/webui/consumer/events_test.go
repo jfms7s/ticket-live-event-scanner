@@ -116,7 +116,7 @@ func TestDiscoveredDBErrorBacksOffThenTerminates(t *testing.T) {
 	}
 
 	last := discoveredMsg(t, 1, 9)
-	last.meta.NumDelivered = streams.EventsConsumerMaxDeliver
+	last.meta.NumDelivered = streams.DefaultMaxDeliver
 	handleDiscovered(context.Background(), db, last)
 	last.assertCalls(t, 0, 0, 1)
 }

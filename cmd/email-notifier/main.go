@@ -52,7 +52,7 @@ func main() {
 	}
 
 	// Get or create consumer
-	consumer, err := streams.EnsureEmailConsumer(ctx, js)
+	consumer, err := streams.EnsureConsumer(ctx, js, streams.EmailConsumer())
 	if err != nil {
 		log.Fatalf("Failed to ensure consumer: %v", err)
 	}

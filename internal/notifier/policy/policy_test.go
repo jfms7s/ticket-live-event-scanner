@@ -110,7 +110,7 @@ func TestBackoffDelay(t *testing.T) {
 
 // TestDecideActionWithStandardMaxDeliver tests against the actual standard max deliver value
 func TestDecideActionWithStandardMaxDeliver(t *testing.T) {
-	maxDeliver := streams.EventsConsumerMaxDeliver
+	maxDeliver := streams.DefaultMaxDeliver
 
 	// First 4 deliveries should nak
 	for i := 1; i < maxDeliver; i++ {
@@ -145,7 +145,7 @@ func TestBackoffExponentialProgression(t *testing.T) {
 
 // TestDecisionBoundaryConditions tests edge cases in decision logic
 func TestDecisionBoundaryConditions(t *testing.T) {
-	maxDeliver := streams.EventsConsumerMaxDeliver
+	maxDeliver := streams.DefaultMaxDeliver
 
 	tests := []struct {
 		name      string
