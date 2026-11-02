@@ -31,15 +31,9 @@ func setupTestDB(t *testing.T) *sql.DB {
 	defer cancel()
 
 	// Create tables directly for testing
-	if err := setupTestSchema(ctx, db); err != nil {
+	if err := store.Migrate(ctx, db); err != nil {
 		t.Fatalf("Failed to setup test schema: %v", err)
 	}
 
 	return db
-}
-
-// setupTestSchema applies the production schema (store.Migrate), so tests
-// see the same columns as a migrated database.
-func setupTestSchema(ctx context.Context, db *sql.DB) error {
-	return store.Migrate(ctx, db)
 }

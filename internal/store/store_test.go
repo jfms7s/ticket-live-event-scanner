@@ -3,64 +3,15 @@ package store
 import (
 	"context"
 	"database/sql"
+	"slices"
 	"strings"
 	"testing"
+
+	_ "modernc.org/sqlite"
 )
 
-func TestSchemaContainsBothTables(t *testing.T) {
-	if !strings.Contains(Schema, "CREATE TABLE IF NOT EXISTS events") {
-		t.Error("Schema missing events table definition")
-	}
-	if !strings.Contains(Schema, "CREATE TABLE IF NOT EXISTS notifications") {
-		t.Error("Schema missing notifications table definition")
-	}
-}
-
-func TestSchemaContainsEventColumns(t *testing.T) {
-	requiredColumns := []string{
-		"id",
-		"slug",
-		"title",
-		"venue",
-		"category",
-		"event_date",
-		"url",
-		"image_url",
-		"discovered_at",
-	}
-	for _, col := range requiredColumns {
-		if !strings.Contains(Schema, col) {
-			t.Errorf("Schema missing events column: %s", col)
-		}
-	}
-}
-
-func TestSchemaContainsNotificationColumns(t *testing.T) {
-	requiredColumns := []string{
-		"id",
-		"event_id",
-		"status",
-		"telegram_message_id",
-		"attempted_at",
-		"confirmed_at",
-		"error",
-		"triggered_by",
-	}
-	for _, col := range requiredColumns {
-		if !strings.Contains(Schema, col) {
-			t.Errorf("Schema missing notifications column: %s", col)
-		}
-	}
-}
-
-func TestSchemaContainsIndex(t *testing.T) {
-	if !strings.Contains(Schema, "CREATE INDEX IF NOT EXISTS idx_notifications_event_id") {
-		t.Error("Schema missing idx_notifications_event_id index")
-	}
-}
-
 // openSQLite opens a temp-file SQLite database through the same driver the
-// tests use elsewhere (modernc.org/sqlite, imported by this package).
+// tests use elsewhere (modernc.org/sqlite, imported by this test file).
 func openSQLite(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := sql.Open("sqlite", "file:"+t.TempDir()+"/store.db")
@@ -279,5 +230,84 @@ func TestMigrateFreshDatabaseTwiceHasDeliverySeq(t *testing.T) {
 	}
 	if unique != 1 {
 		t.Errorf("idx_notifications_event_delivery_seq unique = %d, want 1", unique)
+	}
+}
+
+// orderedColumns lists a table's columns in declaration order.
+func orderedColumns(t *testing.T, db *sql.DB, table string) []string {
+	t.Helper()
+	rows, err := db.Query(`SELECT name FROM pragma_table_info(?) ORDER BY cid`, table)
+	if err != nil {
+		t.Fatalf("table_info %s: %v", table, err)
+	}
+	defer rows.Close()
+	var cols []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan column: %v", err)
+		}
+		cols = append(cols, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("table_info %s: %v", table, err)
+	}
+	return cols
+}
+
+// TestMigratedColumns pins the exact column lists a fresh Migrate produces,
+// so a column added to Schema without a test (or dropped) fails here.
+func TestMigratedColumns(t *testing.T) {
+	db := openSQLite(t)
+	if err := Migrate(context.Background(), db); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	want := map[string][]string{
+		"events": {"id", "slug", "title", "venue", "category", "event_date", "url", "image_url",
+			"discovered_at", "purchased", "invite_status", "invite_error", "hidden"},
+		"notifications": {"id", "event_id", "status", "telegram_message_id", "attempted_at",
+			"confirmed_at", "error", "triggered_by", "delivery_seq"},
+	}
+	for table, cols := range want {
+		if got := orderedColumns(t, db, table); !slices.Equal(got, cols) {
+			t.Errorf("%s columns = %v, want %v", table, got, cols)
+		}
+	}
+}
+
+// TestMigrateAddedColumnsMatchSchema checks every ALTER TABLE definition
+// Migrate applies to an old table is the same text as its Schema line, so
+// fresh and upgraded databases end up with the same column definitions.
+func TestMigrateAddedColumnsMatchSchema(t *testing.T) {
+	for _, def := range append(append([]string{}, addedEventColumns...), addedNotificationColumns...) {
+		if !containsLine(Schema, def) {
+			t.Errorf("added column %q has no identical line in Schema", def)
+		}
+	}
+}
+
+// containsLine reports whether some line of schema, with spacing collapsed
+// and a trailing comma dropped, equals def with spacing collapsed.
+func containsLine(schema, def string) bool {
+	norm := func(s string) string {
+		return strings.Join(strings.Fields(strings.TrimSuffix(strings.TrimSpace(s), ",")), " ")
+	}
+	for _, line := range strings.Split(schema, "\n") {
+		if norm(line) == norm(def) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestConnectAddsAuthToken checks the token becomes the driver's
+// authToken query parameter. sql.Open is lazy, so nothing is dialled.
+func TestConnectAddsAuthToken(t *testing.T) {
+	for _, url := range []string{"libsql://db.example.invalid", "libsql://db.example.invalid?tls=1"} {
+		db, err := Connect(url, "tok")
+		if err != nil {
+			t.Fatalf("Connect(%q): %v", url, err)
+		}
+		db.Close()
 	}
 }
