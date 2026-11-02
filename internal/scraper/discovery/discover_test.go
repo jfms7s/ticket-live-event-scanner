@@ -19,6 +19,7 @@ import (
 	"github.com/jfms7s/ticket-live-event-scanner/internal/streams"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/webui/repository"
 	"github.com/nats-io/nats.go/jetstream"
+	_ "modernc.org/sqlite"
 )
 
 const hubSlug = "fado-hub-500"

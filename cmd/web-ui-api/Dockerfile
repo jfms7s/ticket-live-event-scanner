@@ -20,7 +20,7 @@ COPY . .
 # makes multi-platform builds fast (no QEMU-emulated compile step).
 ARG TARGETOS
 ARG TARGETARCH
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o web-ui-api ./cmd/web-ui-api
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-w -s" -o web-ui-api ./cmd/web-ui-api
 
 # Stage 2: Runtime
 FROM alpine:3.24

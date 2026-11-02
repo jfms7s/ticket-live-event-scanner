@@ -1,0 +1,14 @@
+# Build context for the four Go images (context: repo root). Keep secrets,
+# VCS data and everything the Go builds don't read out of it.
+.env
+.env.*
+.git
+.github
+.claude
+.worktrees
+.quality
+deploy/
+web/
+**/node_modules
+*.test
+bin/

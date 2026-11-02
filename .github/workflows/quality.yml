@@ -23,14 +23,14 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -50,7 +50,7 @@ jobs:
           npx vitest run --coverage.enabled --coverage.provider=v8 --coverage.reporter=lcovonly --coverage.reportsDirectory="$RUNNER_TEMP/cov" '--coverage.include=src/**/*.{ts,tsx}'
           sed 's#^SF:\([^/]\)#SF:web/frontend/\1#' "$RUNNER_TEMP/cov/lcov.info" > "$RUNNER_TEMP/coverage-ts.lcov"
           mv "$RUNNER_TEMP/coverage-ts.lcov" ../../.quality/coverage-ts.lcov
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: ${{ success() }}
         with:
           name: coverage-fragments
@@ -67,10 +67,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
@@ -82,7 +82,7 @@ jobs:
           mkdir -p .quality
           go run golang.org/x/tools/cmd/deadcode@v0.52.0 -json ./... > .quality/deadcode-go.json
         continue-on-error: true
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -96,11 +96,11 @@ jobs:
           mkdir -p .quality
           cd web/frontend && npx --yes knip@5.88.1 --reporter json --no-exit-code > ../../.quality/deadcode-ts.json
         continue-on-error: true
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: coverage-fragments
           path: .quality
         continue-on-error: true
       - name: Code quality (report-only)
-        uses: jfms7s/eng-metrics-lab/action@v0
+        uses: jfms7s/eng-metrics-lab/action@961b196f18ec58c1fc42cdd0e7e000094a39f545 # v0.4.0
         continue-on-error: true

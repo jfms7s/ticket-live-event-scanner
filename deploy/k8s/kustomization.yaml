@@ -11,19 +11,21 @@ resources:
   - web-ui-frontend.yaml
 
 # Pinned to the newest release tag (build-push.yml pushes only `v*` tags).
+# Keep these tags in step with the production pins in helm-argo-cd
+# values.yaml (ticketScanner.*.image.tag).
 images:
   - name: ticket-scanner/scraper
     newName: ghcr.io/jfms7s/ticket-live-event-scanner-scraper
-    newTag: v0.2.1
+    newTag: v0.3.0
   - name: ticket-scanner/telegram-notifier
     newName: ghcr.io/jfms7s/ticket-live-event-scanner-telegram-notifier
-    newTag: v0.2.1
+    newTag: v0.3.0
   - name: ticket-scanner/email-notifier
     newName: ghcr.io/jfms7s/ticket-live-event-scanner-email-notifier
-    newTag: v0.2.1
+    newTag: v0.3.0
   - name: ticket-scanner/web-ui-api
     newName: ghcr.io/jfms7s/ticket-live-event-scanner-web-ui-api
-    newTag: v0.2.1
+    newTag: v0.3.0
   - name: ticket-scanner/web-ui-frontend
     newName: ghcr.io/jfms7s/ticket-live-event-scanner-web-ui-frontend
-    newTag: v0.2.1
+    newTag: v0.3.0

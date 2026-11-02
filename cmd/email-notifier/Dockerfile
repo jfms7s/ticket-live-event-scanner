@@ -18,7 +18,7 @@ COPY . .
 # makes multi-platform builds fast (no QEMU-emulated compile step).
 ARG TARGETOS
 ARG TARGETARCH
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -a -installsuffix cgo \
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-w -s" \
     -o email-notifier ./cmd/email-notifier
 
 # Final stage: Alpine runtime with shell for liveness probe
