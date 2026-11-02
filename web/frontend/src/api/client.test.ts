@@ -39,7 +39,16 @@ describe('api client', () => {
     const fetchMock = stubFetch({ ok: true, status: 200, json: async () => [] });
 
     await expect(fetchEvents('active')).resolves.toEqual([]);
-    expect(fetchMock).toHaveBeenCalledWith('https://x.example/api/events?status=active');
+    expect(fetchMock).toHaveBeenCalledWith('https://x.example/api/events?status=active', { signal: undefined });
+  });
+
+  it('forwards the abort signal to fetch', async () => {
+    stubWindow('https://x.example');
+    const fetchMock = stubFetch({ ok: true, status: 200, json: async () => [] });
+    const controller = new AbortController();
+
+    await fetchEvents('', controller.signal);
+    expect(fetchMock).toHaveBeenCalledWith('https://x.example/api/events', { signal: controller.signal });
   });
 
   it('rejects with the status on a server error', async () => {

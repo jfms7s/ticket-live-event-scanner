@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 
 export type Theme = 'light' | 'dark' | 'system';
 
+// The inline script in index.html reads this key before the app loads, to
+// avoid a flash of the wrong theme; keep the two in step.
 const STORAGE_KEY = 'theme';
 
 function readStoredTheme(): Theme {

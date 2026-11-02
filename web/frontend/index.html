@@ -5,10 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Ticket Live Event Scanner</title>
   <script>
+    // The key must match STORAGE_KEY in src/hooks/useTheme.ts.
     (function () {
-      var stored = localStorage.getItem('theme');
-      if (stored === 'light' || stored === 'dark') {
-        document.documentElement.dataset.theme = stored;
+      try {
+        var stored = localStorage.getItem('theme');
+        if (stored === 'light' || stored === 'dark') {
+          document.documentElement.dataset.theme = stored;
+        }
+      } catch (e) {
+        // Storage blocked: useTheme falls back to the system theme.
       }
     })();
   </script>

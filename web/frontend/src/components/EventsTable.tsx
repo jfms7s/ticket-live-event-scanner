@@ -1,20 +1,6 @@
 import type { Event, SortKey, SortState } from '../types';
+import { COLUMNS, TABLE_COLUMN_COUNT } from './columns';
 import { EventRow } from './EventRow';
-
-interface Column {
-  key: SortKey;
-  label: string;
-}
-
-const COLUMNS: Column[] = [
-  { key: 'title', label: 'Title' },
-  { key: 'venue', label: 'Venue' },
-  { key: 'category', label: 'Category' },
-  { key: 'event_date', label: 'Date' },
-  { key: 'status', label: 'Status' },
-  { key: 'notification', label: 'Notification' },
-  { key: 'purchased', label: 'Bought' },
-];
 
 interface EventsTableProps {
   events: Event[];
@@ -46,7 +32,7 @@ export function EventsTable({ events, sortState, onSort, onPurchasedChange, onDe
         <tbody>
           {events.length === 0 ? (
             <tr className="loading-row">
-              <td colSpan={9}>No events found</td>
+              <td colSpan={TABLE_COLUMN_COUNT}>No events found</td>
             </tr>
           ) : (
             events.map((event) => (
