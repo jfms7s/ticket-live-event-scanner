@@ -1,6 +1,9 @@
 package parse
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestParseEventDetail(t *testing.T) {
 	html := `<!DOCTYPE html>
@@ -238,5 +241,35 @@ func TestValidateEventDateMalformed(t *testing.T) {
 		if err == nil {
 			t.Errorf("validateEventDate(%q): expected error, got nil", dateStr)
 		}
+	}
+}
+
+func TestParseEventDetailMalformedDateWrapsSentinel(t *testing.T) {
+	html := `<html><body>
+	<div itemscope itemtype="http://schema.org/Event">
+	<span itemprop="name">Bad Date Show</span>
+	<span itemprop="startDate" content="22/08/2026">22 Aug</span>
+	</div>
+	</body></html>`
+
+	_, err := ParseEventDetail(html, 4242)
+	if err == nil {
+		t.Fatal("expected an error for a malformed startDate, got nil")
+	}
+	if !errors.Is(err, ErrInvalidEventDate) {
+		t.Errorf("errors.Is(err, ErrInvalidEventDate) = false for %v", err)
+	}
+}
+
+func TestParseEventDetailValidDateNotSentinel(t *testing.T) {
+	html := `<html><body>
+	<div itemscope itemtype="http://schema.org/Event">
+	<span itemprop="name">Good Date Show</span>
+	<span itemprop="startDate" content="2026-08-22">22 Aug</span>
+	</div>
+	</body></html>`
+
+	if _, err := ParseEventDetail(html, 4243); err != nil {
+		t.Fatalf("expected no error, got %v", err)
 	}
 }

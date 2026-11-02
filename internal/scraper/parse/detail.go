@@ -16,12 +16,12 @@ import (
 // hub pages ("2026-09-04T18:30").
 var eventDateLayouts = []string{"2006-01-02", "2006-01-02T15:04"}
 
-// validateEventDate checks if the date string matches one of eventDateLayouts.
-// If the date is empty, it is considered valid (optional field).
 // ErrInvalidEventDate is wrapped by ParseEventDetail when the page's start
-// date matches no known layout.
+// date matches no known layout. Callers match it with errors.Is.
 var ErrInvalidEventDate = errors.New("invalid event date")
 
+// validateEventDate checks if the date string matches one of eventDateLayouts.
+// If the date is empty, it is considered valid (optional field).
 func validateEventDate(dateStr string) error {
 	if dateStr == "" {
 		// Empty date is acceptable (optional field)
