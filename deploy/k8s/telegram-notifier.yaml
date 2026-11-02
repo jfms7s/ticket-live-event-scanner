@@ -15,6 +15,7 @@ spec:
       labels:
         app: telegram-notifier
     spec:
+      automountServiceAccountToken: false
       containers:
       - name: telegram-notifier
         image: ticket-scanner/telegram-notifier:local
@@ -23,6 +24,11 @@ spec:
           runAsNonRoot: true
           runAsUser: 1000
           allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: [ALL]
+          seccompProfile:
+            type: RuntimeDefault
         env:
         - name: NATS_URL
           value: "nats://nats:4222"
@@ -39,14 +45,19 @@ spec:
         # Optional: minimum time between sends (Go duration, default 3s, 0 = off)
         # - name: TELEGRAM_MIN_SEND_INTERVAL
         #   value: "3s"
+        # The notifier rewrites /tmp/healthy every 15 s while NATS and its
+        # consumer answer; a file older than 90 s means it stopped receiving.
         livenessProbe:
           exec:
             command:
             - sh
             - -c
-            - "kill -0 1"
-          initialDelaySeconds: 10
+            - 'test $(( $(date +%s) - $(cat /tmp/healthy) )) -lt 90'
+          initialDelaySeconds: 20
           periodSeconds: 30
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
         resources:
           requests:
             cpu: 50m
@@ -54,3 +65,6 @@ spec:
           limits:
             cpu: 200m
             memory: 128Mi
+      volumes:
+      - name: tmp
+        emptyDir: {}

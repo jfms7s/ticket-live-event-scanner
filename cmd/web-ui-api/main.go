@@ -137,9 +137,15 @@ func main() {
 	// CORS outermost, so preflights are answered before the header check.
 	handler := api.CORSMiddleware(api.RequireCustomHeader(app.NewMux()), corsOrigin)
 
+	// Timeouts keep a slow or idle client from holding connections open
+	// on a small pod.
 	server := &http.Server{
-		Addr:    listenAddr,
-		Handler: handler,
+		Addr:              listenAddr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	// Start server in a goroutine

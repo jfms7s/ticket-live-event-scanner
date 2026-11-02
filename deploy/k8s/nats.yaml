@@ -32,6 +32,7 @@ spec:
       labels:
         app: nats
     spec:
+      automountServiceAccountToken: false
       containers:
       - name: nats
         # NOTE: nats:2-alpine is verified to run as non-root (UID 1000) on modern Kubernetes.
@@ -42,6 +43,11 @@ spec:
           runAsNonRoot: true
           runAsUser: 1000
           allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: [ALL]
+          seccompProfile:
+            type: RuntimeDefault
         args:
         - -js
         - -sd

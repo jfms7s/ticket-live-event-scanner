@@ -31,6 +31,7 @@ spec:
       labels:
         app: web-ui-frontend
     spec:
+      automountServiceAccountToken: false
       containers:
       - name: web-ui-frontend
         image: ticket-scanner/web-ui-frontend:local
@@ -39,6 +40,11 @@ spec:
           runAsNonRoot: true
           runAsUser: 1000
           allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: [ALL]
+          seccompProfile:
+            type: RuntimeDefault
         ports:
         - name: http
           containerPort: 3000
