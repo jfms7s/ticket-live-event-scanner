@@ -183,3 +183,17 @@ func TestDecisionBoundaryConditions(t *testing.T) {
 		})
 	}
 }
+
+// TestMessageActionZeroValueIsNotAnAction guards the enum layout: a
+// zero-valued MessageAction must not be mistaken for a real decision.
+func TestMessageActionZeroValueIsNotAnAction(t *testing.T) {
+	var zero MessageAction
+	if zero == ActionNak || zero == ActionTerm {
+		t.Fatalf("zero MessageAction equals a real action (%d)", zero)
+	}
+	for _, n := range []int{0, 1, 4, 5, 9} {
+		if DecideAction(n, 5) == zero {
+			t.Errorf("DecideAction(%d, 5) returned the zero value", n)
+		}
+	}
+}

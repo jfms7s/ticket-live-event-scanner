@@ -4,14 +4,13 @@ package policy
 
 import "time"
 
-// MessageAction represents the decision to make on a failed message
+// MessageAction is the decision to make on a failed message. The zero value
+// is not a valid action.
 type MessageAction int
 
 const (
-	// ActionAck means the message was successfully processed
-	ActionAck MessageAction = iota
 	// ActionNak means retry the message after a delay
-	ActionNak
+	ActionNak MessageAction = iota + 1
 	// ActionTerm means stop retrying this message permanently
 	ActionTerm
 )
