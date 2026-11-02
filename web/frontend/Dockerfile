@@ -1,6 +1,6 @@
 # The build output is architecture-independent, so build natively instead
 # of under QEMU for arm64.
-FROM --platform=$BUILDPLATFORM node:24-alpine AS build
+FROM --platform=$BUILDPLATFORM node:26-alpine AS build
 
 WORKDIR /app
 
@@ -11,7 +11,7 @@ COPY tsconfig*.json vite.config.ts index.html ./
 COPY src/ src/
 RUN npm run build
 
-FROM node:24-alpine
+FROM node:26-alpine
 
 WORKDIR /app
 
