@@ -2,6 +2,8 @@
 // variables.
 package config
 
+import "github.com/jfms7s/ticket-live-event-scanner/internal/envconfig"
+
 // Config holds the email-notifier's runtime configuration.
 type Config struct {
 	NatsURL      string
@@ -22,13 +24,13 @@ type Config struct {
 // variable is missing.
 func Load() Config {
 	return Config{
-		NatsURL:            getEnv("NATS_URL", "nats://localhost:4222"),
-		SMTPHost:           getEnvRequired("SMTP_HOST"),
-		SMTPPort:           getEnvInt("SMTP_PORT", 587),
-		SMTPUsername:       getEnvRequired("SMTP_USERNAME"),
-		SMTPPassword:       getEnvRequired("SMTP_PASSWORD"),
-		SMTPAllowPlaintext: getEnvBool("SMTP_ALLOW_PLAINTEXT"),
-		EmailFrom:          getEnvRequired("EMAIL_FROM"),
-		EmailTo:            getEnvList("EMAIL_TO"),
+		NatsURL:            envconfig.NatsURL(),
+		SMTPHost:           envconfig.Required("SMTP_HOST"),
+		SMTPPort:           envconfig.Int("SMTP_PORT", 587),
+		SMTPUsername:       envconfig.Required("SMTP_USERNAME"),
+		SMTPPassword:       envconfig.Required("SMTP_PASSWORD"),
+		SMTPAllowPlaintext: envconfig.Bool("SMTP_ALLOW_PLAINTEXT"),
+		EmailFrom:          envconfig.Required("EMAIL_FROM"),
+		EmailTo:            envconfig.List("EMAIL_TO"),
 	}
 }

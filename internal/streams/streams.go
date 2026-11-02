@@ -22,10 +22,18 @@ const (
 	NotificationsFailSubject      = "notifications.failed"
 	NotificationsEmailSentSubject = "notifications.email.sent"
 	NotificationsEmailFailSubject = "notifications.email.failed"
-	EventsConsumerDurableName     = "telegram-notifier"
-	EmailConsumerDurableName      = "email-notifier"
-	EventsConsumerMaxDeliver      = 5
-	EventsConsumerAckWait         = 30 * time.Second
+
+	// Durable consumer names. Changing one makes JetStream create a new
+	// consumer that replays the stream, so they never change.
+	TelegramConsumerDurableName           = "telegram-notifier"
+	EmailConsumerDurableName              = "email-notifier"
+	WebUIEventsConsumerDurableName        = "web-ui-api-events"
+	WebUINotificationsConsumerDurableName = "web-ui-api-notifications"
+
+	// DefaultMaxDeliver and DefaultAckWait are the redelivery policy every
+	// consumer uses; the handlers' nak/term decisions read DefaultMaxDeliver.
+	DefaultMaxDeliver = 5
+	DefaultAckWait    = 30 * time.Second
 
 	streamMaxAge = 90 * 24 * time.Hour
 
@@ -91,50 +99,68 @@ func EnsureStreams(ctx context.Context, js jetstream.JetStream) error {
 	return nil
 }
 
-// EnsureEventsConsumer creates or updates the durable consumer used by
-// telegram-notifier to read events.discovered, with the redelivery policy
-// from
-// the project design doc (kept outside this repo), §6.2/§6.3.
-func EnsureEventsConsumer(ctx context.Context, js jetstream.JetStream) (jetstream.Consumer, error) {
-	stream, err := js.Stream(ctx, EventsStreamName)
-	if err != nil {
-		return nil, fmt.Errorf("get %s stream: %w", EventsStreamName, err)
-	}
-
-	consumer, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
-		Durable:       EventsConsumerDurableName,
-		AckPolicy:     jetstream.AckExplicitPolicy,
-		MaxDeliver:    EventsConsumerMaxDeliver,
-		AckWait:       EventsConsumerAckWait,
-		FilterSubject: EventsSubject,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("ensure %s consumer: %w", EventsConsumerDurableName, err)
-	}
-
-	return consumer, nil
+// ConsumerSpec is one durable pull consumer: the stream it reads and its
+// config.
+type ConsumerSpec struct {
+	Stream string
+	Config jetstream.ConsumerConfig
 }
 
-// EnsureEmailConsumer creates or updates the durable consumer used by
-// email-notifier to read events.purchased, with the same redelivery
-// policy as EnsureEventsConsumer.
-func EnsureEmailConsumer(ctx context.Context, js jetstream.JetStream) (jetstream.Consumer, error) {
-	stream, err := js.Stream(ctx, EventsStreamName)
-	if err != nil {
-		return nil, fmt.Errorf("get %s stream: %w", EventsStreamName, err)
+// consumerConfig is the shared policy with the given durable name; the
+// caller sets the filter.
+func consumerConfig(durable string) jetstream.ConsumerConfig {
+	return jetstream.ConsumerConfig{
+		Durable:    durable,
+		AckPolicy:  jetstream.AckExplicitPolicy,
+		MaxDeliver: DefaultMaxDeliver,
+		AckWait:    DefaultAckWait,
 	}
+}
 
-	consumer, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
-		Durable:       EmailConsumerDurableName,
-		AckPolicy:     jetstream.AckExplicitPolicy,
-		MaxDeliver:    EventsConsumerMaxDeliver,
-		AckWait:       EventsConsumerAckWait,
-		FilterSubject: PurchasedSubject,
-	})
+// TelegramConsumer is telegram-notifier's consumer of events.discovered,
+// with the redelivery policy from the project design doc (kept outside
+// this repo), §6.2/§6.3.
+func TelegramConsumer() ConsumerSpec {
+	cfg := consumerConfig(TelegramConsumerDurableName)
+	cfg.FilterSubject = EventsSubject
+	return ConsumerSpec{Stream: EventsStreamName, Config: cfg}
+}
+
+// EmailConsumer is email-notifier's consumer of events.purchased.
+func EmailConsumer() ConsumerSpec {
+	cfg := consumerConfig(EmailConsumerDurableName)
+	cfg.FilterSubject = PurchasedSubject
+	return ConsumerSpec{Stream: EventsStreamName, Config: cfg}
+}
+
+// WebUIEventsConsumer is web-ui-api's consumer of events.discovered.
+func WebUIEventsConsumer() ConsumerSpec {
+	cfg := consumerConfig(WebUIEventsConsumerDurableName)
+	cfg.FilterSubject = EventsSubject
+	return ConsumerSpec{Stream: EventsStreamName, Config: cfg}
+}
+
+// WebUINotificationsConsumer is web-ui-api's consumer of Telegram and email
+// delivery results. It lists every subject it handles: the email results
+// have three tokens, which a "notifications.*" filter never matched.
+// JetStream lets CreateOrUpdateConsumer change the filter of an existing
+// durable pull consumer, which keeps its position.
+func WebUINotificationsConsumer() ConsumerSpec {
+	cfg := consumerConfig(WebUINotificationsConsumerDurableName)
+	cfg.FilterSubjects = NotificationsSubjects()
+	return ConsumerSpec{Stream: NotificationsStreamName, Config: cfg}
+}
+
+// EnsureConsumer creates or updates the durable consumer spec describes.
+func EnsureConsumer(ctx context.Context, js jetstream.JetStream, spec ConsumerSpec) (jetstream.Consumer, error) {
+	stream, err := js.Stream(ctx, spec.Stream)
 	if err != nil {
-		return nil, fmt.Errorf("ensure %s consumer: %w", EmailConsumerDurableName, err)
+		return nil, fmt.Errorf("get %s stream: %w", spec.Stream, err)
 	}
-
+	consumer, err := stream.CreateOrUpdateConsumer(ctx, spec.Config)
+	if err != nil {
+		return nil, fmt.Errorf("ensure %s consumer: %w", spec.Config.Durable, err)
+	}
 	return consumer, nil
 }
 

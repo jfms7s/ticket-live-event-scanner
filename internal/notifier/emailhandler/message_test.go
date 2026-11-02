@@ -221,7 +221,7 @@ func TestHandleMessage(t *testing.T) {
 		},
 		{
 			name: "send fails on final delivery publishes failed and terms",
-			msg:  func(t *testing.T) *fakeMsg { return newMsg(t, uint64(streams.EventsConsumerMaxDeliver), 10) },
+			msg:  func(t *testing.T) *fakeMsg { return newMsg(t, uint64(streams.DefaultMaxDeliver), 10) },
 			want: outcome{terms: 1, publishes: []string{streams.NotificationsEmailFailSubject}, sends: 1},
 		},
 		{
@@ -248,7 +248,7 @@ func TestHandleMessage(t *testing.T) {
 			msg: func(t *testing.T) *fakeMsg {
 				m := newMsg(t, 0, 0)
 				m.metaErr = metaErr
-				m.headers = nats.Header{"Nats-Num-Delivered": []string{strconv.Itoa(streams.EventsConsumerMaxDeliver)}}
+				m.headers = nats.Header{"Nats-Num-Delivered": []string{strconv.Itoa(streams.DefaultMaxDeliver)}}
 				return m
 			},
 			want: outcome{terms: 1, publishes: []string{streams.NotificationsEmailFailSubject}},
@@ -273,7 +273,7 @@ func TestHandleMessage(t *testing.T) {
 			want: outcome{nakDelays: []time.Duration{5 * time.Second}},
 		},
 	}
-	for n := 1; n < streams.EventsConsumerMaxDeliver; n++ {
+	for n := 1; n < streams.DefaultMaxDeliver; n++ {
 		delivered := uint64(n)
 		cases = append(cases, tc{
 			name: fmt.Sprintf("send fails at delivery %d naks with backoff", n),
@@ -385,7 +385,7 @@ func TestHandleMessage_CachedRepublishFails(t *testing.T) {
 		want      outcome
 	}{
 		{3, outcome{nakDelays: []time.Duration{15 * time.Second}, publishes: []string{streams.NotificationsEmailSentSubject}}},
-		{uint64(streams.EventsConsumerMaxDeliver), outcome{terms: 1, publishes: []string{streams.NotificationsEmailSentSubject, streams.NotificationsEmailFailSubject}}},
+		{uint64(streams.DefaultMaxDeliver), outcome{terms: 1, publishes: []string{streams.NotificationsEmailSentSubject, streams.NotificationsEmailFailSubject}}},
 	} {
 		t.Run(fmt.Sprintf("delivery_%d", c.delivered), func(t *testing.T) {
 			pub := &fakePublisher{fail: map[string]bool{streams.NotificationsEmailSentSubject: true}}
@@ -427,7 +427,7 @@ func TestHandleMessage_SentPublishFailsOnFinalAttempt_PublishesFailed(t *testing
 	s := &fakeSender{messageID: "777"}
 	h := newTestHandler(pub, s)
 
-	m := newMsg(t, uint64(streams.EventsConsumerMaxDeliver), 10)
+	m := newMsg(t, uint64(streams.DefaultMaxDeliver), 10)
 	if err := h.HandleMessage(context.Background(), m); err != nil {
 		t.Fatal(err)
 	}

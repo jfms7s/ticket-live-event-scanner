@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
 	"time"
 
@@ -14,37 +13,6 @@ import (
 	"github.com/jfms7s/ticket-live-event-scanner/internal/webui/repository"
 	"github.com/nats-io/nats.go/jetstream"
 )
-
-// notificationsConsumerConfig is the durable web-ui-api-notifications
-// consumer. It lists the subjects handleNotification handles explicitly:
-// the email results have three tokens, which a "notifications.*" filter
-// never matched. JetStream lets CreateOrUpdateConsumer change the filter of
-// an existing durable pull consumer, which keeps its position.
-func notificationsConsumerConfig() jetstream.ConsumerConfig {
-	return jetstream.ConsumerConfig{
-		Durable:        "web-ui-api-notifications",
-		AckPolicy:      jetstream.AckExplicitPolicy,
-		MaxDeliver:     streams.EventsConsumerMaxDeliver,
-		AckWait:        streams.EventsConsumerAckWait,
-		FilterSubjects: streams.NotificationsSubjects(),
-	}
-}
-
-// CreateOrUpdateNotificationsConsumer creates or updates the durable
-// consumer used by web-ui-api to read Telegram and email delivery results.
-func CreateOrUpdateNotificationsConsumer(ctx context.Context, js jetstream.JetStream) (jetstream.Consumer, error) {
-	stream, err := js.Stream(ctx, streams.NotificationsStreamName)
-	if err != nil {
-		return nil, fmt.Errorf("get %s stream: %w", streams.NotificationsStreamName, err)
-	}
-
-	consumer, err := stream.CreateOrUpdateConsumer(ctx, notificationsConsumerConfig())
-	if err != nil {
-		return nil, fmt.Errorf("create notifications consumer: %w", err)
-	}
-
-	return consumer, nil
-}
 
 // ConsumeNotifications reads from the notifications consumer and applies
 // each delivery result to the database.
@@ -155,7 +123,7 @@ func retryUntilMaterialized(msg jetstream.Msg, eventID int64) {
 	if meta, err := msg.Metadata(); err == nil && meta.NumDelivered > 0 {
 		delivered = meta.NumDelivered
 	}
-	if delivered >= streams.EventsConsumerMaxDeliver {
+	if delivered >= streams.DefaultMaxDeliver {
 		log.Printf("WARN event %d still not materialized after %d deliveries; its Telegram result will be dropped", eventID, delivered)
 	} else {
 		log.Printf("Event %d not materialized yet; retrying its Telegram result (delivery %d)", eventID, delivered)

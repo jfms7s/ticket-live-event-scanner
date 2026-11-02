@@ -4,6 +4,8 @@ package config
 import (
 	"errors"
 	"log"
+
+	"github.com/jfms7s/ticket-live-event-scanner/internal/envconfig"
 )
 
 // Config holds the scraper's runtime configuration.
@@ -27,12 +29,12 @@ var defaultHubPages = []string{}
 // variable is missing.
 func Load() Config {
 	cfg := Config{
-		NatsURL:          getEnv("NATS_URL", "nats://localhost:4222"),
-		TursoDatabaseURL: getEnvRequired("TURSO_DATABASE_URL"),
-		TursoAuthToken:   getEnvRequired("TURSO_AUTH_TOKEN"),
-		UserAgent:        getEnv("USER_AGENT", "ticket-live-event-scanner/0.1 (personal project; contact: jfms7s@gmail.com)"),
-		RequestDelayMS:   getEnvInt("REQUEST_DELAY_MS", 1500),
-		HubPages:         getEnvHubPages("TICKETLINE_HUB_PAGES", defaultHubPages),
+		NatsURL:          envconfig.NatsURL(),
+		TursoDatabaseURL: envconfig.Required("TURSO_DATABASE_URL"),
+		TursoAuthToken:   envconfig.Required("TURSO_AUTH_TOKEN"),
+		UserAgent:        envconfig.String("USER_AGENT", "ticket-live-event-scanner/0.1 (personal project; contact: jfms7s@gmail.com)"),
+		RequestDelayMS:   envconfig.Int("REQUEST_DELAY_MS", 1500),
+		HubPages:         hubPagesFromEnv("TICKETLINE_HUB_PAGES", defaultHubPages),
 	}
 	if err := requireHubPages(cfg.HubPages); err != nil {
 		log.Fatal(err)

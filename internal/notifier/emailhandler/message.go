@@ -47,7 +47,7 @@ func (h *Handler) HandleMessage(ctx context.Context, msg jetstream.Msg) error {
 		}
 		log.Printf("Using fallback delivery count %d for event %d after metadata failure", numDelivered, purchased.EventID)
 
-		if numDelivered >= streams.EventsConsumerMaxDeliver {
+		if numDelivered >= streams.DefaultMaxDeliver {
 			log.Printf("Event %d reached max delivery attempts (%d) with metadata failure", purchased.EventID, numDelivered)
 			if err := h.publishEmailFailed(ctx, purchased.EventID, fmt.Sprintf("metadata error: %v", err), numDelivered, uint64(purchased.EventID)); err != nil {
 				log.Printf("Failed to publish notifications.email.failed for event %d: %v", purchased.EventID, err)
@@ -60,7 +60,7 @@ func (h *Handler) HandleMessage(ctx context.Context, msg jetstream.Msg) error {
 
 		delay := policy.BackoffDelay(numDelivered)
 		log.Printf("Retrying metadata failure for event %d (attempt %d/%d) in %v",
-			purchased.EventID, numDelivered, streams.EventsConsumerMaxDeliver, delay)
+			purchased.EventID, numDelivered, streams.DefaultMaxDeliver, delay)
 		if err := msg.NakWithDelay(delay); err != nil {
 			log.Printf("Failed to nak message for event %d: %v", purchased.EventID, err)
 		}
@@ -81,9 +81,9 @@ func (h *Handler) HandleMessage(ctx context.Context, msg jetstream.Msg) error {
 			purchased.EventID, recent.messageID)
 		if err := h.publishEmailSent(ctx, purchased.EventID, recent.messageID, natsSeq); err != nil {
 			log.Printf("Failed to republish notifications.email.sent for event %d (attempt %d/%d): %v",
-				purchased.EventID, numDelivered, streams.EventsConsumerMaxDeliver, err)
+				purchased.EventID, numDelivered, streams.DefaultMaxDeliver, err)
 
-			if numDelivered >= streams.EventsConsumerMaxDeliver {
+			if numDelivered >= streams.DefaultMaxDeliver {
 				_ = h.publishEmailFailed(ctx, purchased.EventID, err.Error(), numDelivered, natsSeq)
 				if err := msg.Term(); err != nil {
 					log.Printf("Failed to terminate message for event %d: %v", purchased.EventID, err)
@@ -123,9 +123,9 @@ func (h *Handler) HandleMessage(ctx context.Context, msg jetstream.Msg) error {
 
 		if err := h.publishEmailSent(ctx, purchased.EventID, messageID, natsSeq); err != nil {
 			log.Printf("Failed to publish notifications.email.sent for event %d (attempt %d/%d): %v",
-				purchased.EventID, numDelivered, streams.EventsConsumerMaxDeliver, err)
+				purchased.EventID, numDelivered, streams.DefaultMaxDeliver, err)
 
-			if numDelivered >= streams.EventsConsumerMaxDeliver {
+			if numDelivered >= streams.DefaultMaxDeliver {
 				if err := h.publishEmailFailed(ctx, purchased.EventID, err.Error(), numDelivered, natsSeq); err != nil {
 					log.Printf("Failed to publish notifications.email.failed for event %d (final attempt): %v",
 						purchased.EventID, err)
@@ -154,12 +154,12 @@ func (h *Handler) HandleMessage(ctx context.Context, msg jetstream.Msg) error {
 	}
 
 	// Failure: decide whether to nak with backoff or term
-	action := policy.DecideAction(numDelivered, streams.EventsConsumerMaxDeliver)
+	action := policy.DecideAction(numDelivered, streams.DefaultMaxDeliver)
 
 	if action == policy.ActionNak {
 		delay := policy.BackoffDelay(numDelivered)
 		log.Printf("Failed to send calendar email for event %d (attempt %d/%d): %v. Retrying in %v",
-			purchased.EventID, numDelivered, streams.EventsConsumerMaxDeliver, sendErr, delay)
+			purchased.EventID, numDelivered, streams.DefaultMaxDeliver, sendErr, delay)
 		if err := msg.NakWithDelay(delay); err != nil {
 			log.Printf("Failed to nak message for event %d with delay: %v", purchased.EventID, err)
 		}

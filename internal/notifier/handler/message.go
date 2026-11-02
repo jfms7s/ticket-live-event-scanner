@@ -49,7 +49,7 @@ func (h *Handler) HandleMessage(ctx context.Context, msg jetstream.Msg) error {
 		log.Printf("Using fallback delivery count %d for event %d after metadata failure", numDelivered, discovered.EventID)
 
 		// Check if we've hit the delivery limit
-		if numDelivered >= streams.EventsConsumerMaxDeliver {
+		if numDelivered >= streams.DefaultMaxDeliver {
 			// Final attempt: publish notification.failed and term
 			// The stream sequence is unknown without metadata: send 0, so the
 			// result carries no delivery_seq and web-ui-api falls back to the
@@ -67,7 +67,7 @@ func (h *Handler) HandleMessage(ctx context.Context, msg jetstream.Msg) error {
 		// Retry with linear backoff
 		delay := policy.BackoffDelay(numDelivered)
 		log.Printf("Retrying metadata failure for event %d (attempt %d/%d) in %v",
-			discovered.EventID, numDelivered, streams.EventsConsumerMaxDeliver, delay)
+			discovered.EventID, numDelivered, streams.DefaultMaxDeliver, delay)
 		if err := msg.NakWithDelay(delay); err != nil {
 			log.Printf("Failed to nak message for event %d: %v", discovered.EventID, err)
 		}
@@ -91,10 +91,10 @@ func (h *Handler) HandleMessage(ctx context.Context, msg jetstream.Msg) error {
 			discovered.EventID, recent.messageID)
 		if err := h.publishNotificationSent(ctx, discovered.EventID, recent.messageID, natsSeq); err != nil {
 			log.Printf("Failed to republish notification.sent for event %d (attempt %d/%d): %v",
-				discovered.EventID, numDelivered, streams.EventsConsumerMaxDeliver, err)
+				discovered.EventID, numDelivered, streams.DefaultMaxDeliver, err)
 
 			// Respect MaxDeliver policy for the republish attempt
-			if numDelivered >= streams.EventsConsumerMaxDeliver {
+			if numDelivered >= streams.DefaultMaxDeliver {
 				// Final attempt: publish notification.failed and term
 				_ = h.publishNotificationFailed(ctx, discovered.EventID, err.Error(), numDelivered, natsSeq)
 				if err := msg.Term(); err != nil {
@@ -150,10 +150,10 @@ func (h *Handler) HandleMessage(ctx context.Context, msg jetstream.Msg) error {
 		// Now attempt to publish notification.sent to NATS (this may fail without affecting duplicate prevention)
 		if err := h.publishNotificationSent(ctx, discovered.EventID, telegramMessageID, natsSeq); err != nil {
 			log.Printf("Failed to publish notification.sent for event %d (attempt %d/%d): %v",
-				discovered.EventID, numDelivered, streams.EventsConsumerMaxDeliver, err)
+				discovered.EventID, numDelivered, streams.DefaultMaxDeliver, err)
 
 			// If publish fails, respect MaxDeliver policy for retry
-			if numDelivered >= streams.EventsConsumerMaxDeliver {
+			if numDelivered >= streams.DefaultMaxDeliver {
 				// Final attempt: publish notification.failed and term
 				if err := h.publishNotificationFailed(ctx, discovered.EventID, err.Error(), numDelivered, natsSeq); err != nil {
 					log.Printf("Failed to publish notification.failed for event %d (final attempt): %v",
@@ -184,14 +184,14 @@ func (h *Handler) HandleMessage(ctx context.Context, msg jetstream.Msg) error {
 	}
 
 	// Failure: decide whether to nak with backoff or term
-	action := policy.DecideAction(numDelivered, streams.EventsConsumerMaxDeliver)
+	action := policy.DecideAction(numDelivered, streams.DefaultMaxDeliver)
 
 	if action == policy.ActionNak {
 		// Redelivery attempts remaining: nak with linear backoff, or at
 		// least Telegram's retry_after for a rate limit
 		delay := retryDelay(telegramErr, numDelivered)
 		log.Printf("Failed to send notification for event %d (attempt %d/%d): %v. Retrying in %v",
-			discovered.EventID, numDelivered, streams.EventsConsumerMaxDeliver, telegramErr, delay)
+			discovered.EventID, numDelivered, streams.DefaultMaxDeliver, telegramErr, delay)
 		if err := msg.NakWithDelay(delay); err != nil {
 			log.Printf("Failed to nak message for event %d with delay: %v", discovered.EventID, err)
 		}

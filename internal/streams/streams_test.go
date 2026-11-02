@@ -1,10 +1,11 @@
 package streams
 
 import (
-	"github.com/nats-io/nats.go/jetstream"
-
+	"slices"
 	"testing"
 	"time"
+
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 func TestEventStreamConstants(t *testing.T) {
@@ -28,15 +29,46 @@ func TestNotificationsStreamConstants(t *testing.T) {
 	}
 }
 
-func TestEventsConsumerConfig(t *testing.T) {
-	if EventsConsumerDurableName != "telegram-notifier" {
-		t.Errorf("EventsConsumerDurableName = %q, want %q", EventsConsumerDurableName, "telegram-notifier")
+// TestConsumerSpecs pins every durable consumer: a changed durable name
+// or filter makes JetStream create a new consumer that replays the stream.
+// The values are byte-identical to the ones before the specs moved here.
+func TestConsumerSpecs(t *testing.T) {
+	tests := []struct {
+		name           string
+		spec           ConsumerSpec
+		stream         string
+		durable        string
+		filterSubject  string
+		filterSubjects []string
+	}{
+		{"telegram", TelegramConsumer(), "EVENTS", "telegram-notifier", "events.discovered", nil},
+		{"email", EmailConsumer(), "EVENTS", "email-notifier", "events.purchased", nil},
+		{"web-ui events", WebUIEventsConsumer(), "EVENTS", "web-ui-api-events", "events.discovered", nil},
+		{"web-ui notifications", WebUINotificationsConsumer(), "NOTIFICATIONS", "web-ui-api-notifications", "",
+			[]string{"notifications.sent", "notifications.failed", "notifications.email.sent", "notifications.email.failed"}},
 	}
-	if EventsConsumerMaxDeliver != 5 {
-		t.Errorf("EventsConsumerMaxDeliver = %d, want %d", EventsConsumerMaxDeliver, 5)
-	}
-	if EventsConsumerAckWait != 30*time.Second {
-		t.Errorf("EventsConsumerAckWait = %v, want %v", EventsConsumerAckWait, 30*time.Second)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := tt.spec.Config
+			if tt.spec.Stream != tt.stream {
+				t.Errorf("Stream = %q, want %q", tt.spec.Stream, tt.stream)
+			}
+			if c.Durable != tt.durable {
+				t.Errorf("Durable = %q, want %q", c.Durable, tt.durable)
+			}
+			if c.FilterSubject != tt.filterSubject {
+				t.Errorf("FilterSubject = %q, want %q", c.FilterSubject, tt.filterSubject)
+			}
+			if !slices.Equal(c.FilterSubjects, tt.filterSubjects) {
+				t.Errorf("FilterSubjects = %v, want %v", c.FilterSubjects, tt.filterSubjects)
+			}
+			if c.AckPolicy != jetstream.AckExplicitPolicy {
+				t.Errorf("AckPolicy = %v, want explicit", c.AckPolicy)
+			}
+			if c.MaxDeliver != 5 || c.AckWait != 30*time.Second {
+				t.Errorf("MaxDeliver/AckWait = %d/%v, want 5/30s", c.MaxDeliver, c.AckWait)
+			}
+		})
 	}
 }
 

@@ -7,7 +7,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"log"
 
 	"github.com/jfms7s/ticket-live-event-scanner/internal/event"
@@ -16,28 +15,6 @@ import (
 	"github.com/jfms7s/ticket-live-event-scanner/internal/webui/repository"
 	"github.com/nats-io/nats.go/jetstream"
 )
-
-// CreateOrUpdateEventsConsumer creates or updates the durable consumer
-// used by web-ui-api to read events.discovered.
-func CreateOrUpdateEventsConsumer(ctx context.Context, js jetstream.JetStream) (jetstream.Consumer, error) {
-	stream, err := js.Stream(ctx, streams.EventsStreamName)
-	if err != nil {
-		return nil, fmt.Errorf("get %s stream: %w", streams.EventsStreamName, err)
-	}
-
-	consumer, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
-		Durable:       "web-ui-api-events",
-		AckPolicy:     jetstream.AckExplicitPolicy,
-		MaxDeliver:    streams.EventsConsumerMaxDeliver,
-		AckWait:       streams.EventsConsumerAckWait,
-		FilterSubject: streams.EventsSubject,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create events consumer: %w", err)
-	}
-
-	return consumer, nil
-}
 
 // ConsumeEventsDiscovered reads from the events.discovered consumer and
 // materializes events into the database.
@@ -114,7 +91,7 @@ func retryOnDBError(msg jetstream.Msg, what string, eventID int64, cause error) 
 	if meta, err := msg.Metadata(); err == nil && meta.NumDelivered > 0 {
 		delivered = int(meta.NumDelivered)
 	}
-	if policy.DecideAction(delivered, streams.EventsConsumerMaxDeliver) == policy.ActionTerm {
+	if policy.DecideAction(delivered, streams.DefaultMaxDeliver) == policy.ActionTerm {
 		log.Printf("ERROR giving up on %s for event %d after %d deliveries: %s: %v", msg.Subject(), eventID, delivered, what, cause)
 		if err := msg.Term(); err != nil {
 			log.Printf("Error terminating %s for event %d: %v", msg.Subject(), eventID, err)
