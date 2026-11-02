@@ -37,14 +37,10 @@ type NotificationInEventResponse struct {
 	TriggeredBy       string  `json:"triggered_by"`
 }
 
-// NotificationResponse represents a standalone notification in the JSON API response (includes event_id).
+// NotificationResponse is a standalone notification in the JSON API
+// response: the nested shape plus event_id. encoding/json flattens the
+// embedded struct, so its fields appear at the top level.
 type NotificationResponse struct {
-	ID                int64   `json:"id"`
-	EventID           int64   `json:"event_id"`
-	Status            string  `json:"status"`
-	TelegramMessageID *string `json:"telegram_message_id"`
-	AttemptedAt       string  `json:"attempted_at"`
-	ConfirmedAt       *string `json:"confirmed_at"`
-	Error             *string `json:"error"`
-	TriggeredBy       string  `json:"triggered_by"`
+	NotificationInEventResponse
+	EventID int64 `json:"event_id"`
 }

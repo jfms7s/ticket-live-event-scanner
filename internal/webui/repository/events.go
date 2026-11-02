@@ -12,49 +12,32 @@ import (
 // notifications and its status computed as of now, optionally filtered by
 // status: "" (all), "active", or "finished".
 func ListEvents(ctx context.Context, db *sql.DB, status string, now time.Time) ([]EventResponse, error) {
-	query := `
-		SELECT id, slug, title, venue, category, event_date, url, image_url, discovered_at, purchased,
-		       invite_status, invite_error
+	rows, err := db.QueryContext(ctx, `SELECT `+eventColumns+`
 		FROM events
 		WHERE hidden = 0
-		ORDER BY discovered_at DESC
-	`
-
-	rows, err := db.QueryContext(ctx, query)
+		ORDER BY discovered_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("query events: %w", err)
 	}
 
-	// Scan every row into a base struct first and close rows before issuing
-	// any further queries. Issuing the notifications query (a second
-	// db.QueryContext on the same *sql.DB) while these rows are still open
-	// would deadlock: under a constrained connection
-	// pool (e.g. MaxOpenConns=1, as in tests) the nested query can never
-	// get a connection because the outer Rows is holding the only one,
-	// while the outer loop can't finish until the nested query returns.
-	type eventBase struct {
-		id                                   int64
-		slug, title, url                     string
-		venue, category, eventDate, imageURL *string
-		discoveredAtStr                      string
-		purchased                            bool
-		inviteStatus, inviteError            *string
-		computedStatus                       string
-	}
-	var bases []eventBase
-
+	// Scan every row first and close rows before issuing any further
+	// queries. Issuing the notifications query (a second db.QueryContext on
+	// the same *sql.DB) while these rows are still open would deadlock:
+	// under a constrained connection pool (e.g. MaxOpenConns=1, as in tests)
+	// the nested query can never get a connection because the outer Rows is
+	// holding the only one, while the outer loop can't finish until the
+	// nested query returns.
+	var events []EventResponse
 	for rows.Next() {
-		var b eventBase
-		if err := rows.Scan(&b.id, &b.slug, &b.title, &b.venue, &b.category, &b.eventDate, &b.url, &b.imageURL, &b.discoveredAtStr, &b.purchased, &b.inviteStatus, &b.inviteError); err != nil {
+		e, err := scanEvent(rows, now)
+		if err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("scan row: %w", err)
 		}
-
-		b.computedStatus = computeStatus(b.eventDate, now)
-		if status != "" && b.computedStatus != status {
+		if status != "" && e.Status != status {
 			continue
 		}
-		bases = append(bases, b)
+		events = append(events, e)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -69,29 +52,13 @@ func ListEvents(ctx context.Context, db *sql.DB, status string, now time.Time) (
 		return nil, err
 	}
 
-	events := make([]EventResponse, 0, len(bases))
-	for _, b := range bases {
-		notifs := byEvent[b.id]
-		if notifs == nil {
-			notifs = []NotificationInEventResponse{}
+	for i := range events {
+		if notifs := byEvent[events[i].ID]; notifs != nil {
+			events[i].Notifications = notifs
 		}
-
-		events = append(events, EventResponse{
-			ID:            b.id,
-			Slug:          b.slug,
-			Title:         b.title,
-			Venue:         b.venue,
-			Category:      b.category,
-			EventDate:     b.eventDate,
-			URL:           b.url,
-			ImageURL:      b.imageURL,
-			DiscoveredAt:  b.discoveredAtStr,
-			Purchased:     b.purchased,
-			Status:        b.computedStatus,
-			Notifications: notifs,
-			InviteStatus:  b.inviteStatus,
-			InviteError:   b.inviteError,
-		})
+	}
+	if events == nil {
+		events = []EventResponse{}
 	}
 
 	return events, nil
@@ -100,48 +67,44 @@ func ListEvents(ctx context.Context, db *sql.DB, status string, now time.Time) (
 // GetEvent returns one visible event with its notifications and its status
 // computed as of now. A hidden event is reported as sql.ErrNoRows.
 func GetEvent(ctx context.Context, db *sql.DB, id int64, now time.Time) (*EventResponse, error) {
-	query := `
-		SELECT id, slug, title, venue, category, event_date, url, image_url, discovered_at, purchased,
-		       invite_status, invite_error
+	row := db.QueryRowContext(ctx, `SELECT `+eventColumns+`
 		FROM events
-		WHERE id = ? AND hidden = 0
-	`
-
-	var slug, title, url string
-	var venue, category, eventDate, imageURL *string
-	var discoveredAtStr string
-	var purchased bool
-	var inviteStatus, inviteError *string
-
-	if err := db.QueryRowContext(ctx, query, id).Scan(&id, &slug, &title, &venue, &category, &eventDate, &url, &imageURL, &discoveredAtStr, &purchased, &inviteStatus, &inviteError); err != nil {
+		WHERE id = ? AND hidden = 0`, id)
+	e, err := scanEvent(row, now)
+	if err != nil {
 		return nil, err
 	}
 
-	// Compute status
-	computedStatus := computeStatus(eventDate, now)
-
-	// Get notifications for this event
 	notifs, err := GetNotificationsForEvent(ctx, db, id)
 	if err != nil {
 		return nil, fmt.Errorf("get notifications: %w", err)
 	}
+	e.Notifications = notifs
 
-	return &EventResponse{
-		ID:            id,
-		Slug:          slug,
-		Title:         title,
-		Venue:         venue,
-		Category:      category,
-		EventDate:     eventDate,
-		URL:           url,
-		ImageURL:      imageURL,
-		DiscoveredAt:  discoveredAtStr,
-		Purchased:     purchased,
-		Status:        computedStatus,
-		Notifications: notifs,
-		InviteStatus:  inviteStatus,
-		InviteError:   inviteError,
-	}, nil
+	return &e, nil
+}
+
+// rowScanner is the Scan method shared by *sql.Row and *sql.Rows.
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+// eventColumns is the column list scanEvent expects, in order.
+const eventColumns = `id, slug, title, venue, category, event_date, url, image_url, discovered_at, purchased,
+		       invite_status, invite_error`
+
+// scanEvent scans one eventColumns row, computes its status as of now and
+// starts it with an empty notification list. Errors (sql.ErrNoRows
+// included) are returned unwrapped.
+func scanEvent(s rowScanner, now time.Time) (EventResponse, error) {
+	var e EventResponse
+	if err := s.Scan(&e.ID, &e.Slug, &e.Title, &e.Venue, &e.Category, &e.EventDate, &e.URL, &e.ImageURL,
+		&e.DiscoveredAt, &e.Purchased, &e.InviteStatus, &e.InviteError); err != nil {
+		return EventResponse{}, err
+	}
+	e.Status = computeStatus(e.EventDate, now)
+	e.Notifications = []NotificationInEventResponse{}
+	return e, nil
 }
 
 // SetEventPurchased sets the purchased flag for a single event and reports
