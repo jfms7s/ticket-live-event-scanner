@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jfms7s/ticket-live-event-scanner/internal/health"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/notifier/handler"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/shutdown"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/streams"
@@ -18,6 +19,10 @@ import (
 // drainTimeout bounds how long shutdown waits for the message in progress,
 // under Kubernetes' default 30 s termination grace period.
 const drainTimeout = 25 * time.Second
+
+// healthInterval is how often the liveness file is refreshed; the probe
+// allows several missed beats.
+const healthInterval = 15 * time.Second
 
 func main() {
 	// Load environment variables
@@ -80,6 +85,10 @@ func main() {
 
 	// Start cache cleanup goroutine (removes stale entries every 30 seconds)
 	go h.CleanupCache(ctx)
+
+	// Refresh the liveness file while NATS and the consumer are reachable,
+	// so the probe fails when the notifier can no longer receive messages.
+	go health.Heartbeat(ctx, health.File(), healthInterval, health.NATSConsumerCheck(nc.Status, consumer))
 
 	// Start consuming messages
 	go func() {

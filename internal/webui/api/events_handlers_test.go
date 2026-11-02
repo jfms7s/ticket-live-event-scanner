@@ -505,3 +505,51 @@ func TestDeleteEventHidesIt(t *testing.T) {
 		t.Fatalf("Expected a second DELETE to return 404, got %d", againResp.StatusCode)
 	}
 }
+
+// TestSetPurchasedRejectsOversizedBody checks the PATCH body is capped: a
+// 2 KiB body that would otherwise decode fine is refused and changes nothing.
+func TestSetPurchasedRejectsOversizedBody(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO events (id, slug, title, venue, category, event_date, url, image_url, discovered_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, 98165, "big-body", "Big Body", "", "", "", "http://example.com", "", "2026-08-17T09:00:00Z")
+	if err != nil {
+		t.Fatalf("Failed to insert test event: %v", err)
+	}
+
+	mockJS := NewMockJetStream()
+	app := &App{db: db, js: mockJS}
+	server := httptest.NewServer(app.NewMux())
+	defer server.Close()
+
+	body := `{"purchased":true,"pad":"` + strings.Repeat("x", 2048) + `"}`
+	req, err := http.NewRequest(http.MethodPatch, server.URL+"/api/events/98165/purchased", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("Failed to build request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Failed to make request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("Expected status 400 for a 2 KiB body, got %d", resp.StatusCode)
+	}
+
+	var purchased bool
+	if err := db.QueryRowContext(ctx, `SELECT purchased FROM events WHERE id = ?`, 98165).Scan(&purchased); err != nil {
+		t.Fatalf("Failed to read purchased: %v", err)
+	}
+	if purchased {
+		t.Fatal("Expected purchased to stay false after an oversized body")
+	}
+	if len(mockJS.publishedMessages) != 0 {
+		t.Fatalf("Expected no published message, got %d", len(mockJS.publishedMessages))
+	}
+}

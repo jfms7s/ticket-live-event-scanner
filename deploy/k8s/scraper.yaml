@@ -43,6 +43,7 @@ spec:
             app: scraper
         spec:
           serviceAccountName: scraper
+          automountServiceAccountToken: false
           containers:
           - name: scraper
             image: ticket-scanner/scraper:local
@@ -51,6 +52,11 @@ spec:
               runAsNonRoot: true
               runAsUser: 1000
               allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop: [ALL]
+              seccompProfile:
+                type: RuntimeDefault
             env:
             - name: TICKETLINE_HUB_PAGES
               value: "auchan-live-academia-maia-98164,auchan-live-academia-aveiro-98167"

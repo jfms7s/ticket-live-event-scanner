@@ -138,6 +138,10 @@ func (app *App) handleRetrigger(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// maxPurchasedBodyBytes caps the handleSetPurchased body; the real one is
+// about 20 bytes.
+const maxPurchasedBodyBytes = 1024
+
 // setPurchasedRequest is the JSON body for handleSetPurchased.
 type setPurchasedRequest struct {
 	Purchased bool `json:"purchased"`
@@ -153,6 +157,7 @@ func (app *App) handleSetPurchased(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body setPurchasedRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxPurchasedBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
 		return
