@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/jfms7s/ticket-live-event-scanner/internal/event"
@@ -23,91 +22,66 @@ func (app *App) handleListEvents(w http.ResponseWriter, r *http.Request) {
 
 	// Validate status parameter
 	if status != "" && status != "active" && status != "finished" {
-		http.Error(w, `{"error":"status must be 'active' or 'finished'"}`, http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "status must be 'active' or 'finished'")
 		return
 	}
 
 	events, err := repository.ListEvents(r.Context(), app.db, status, time.Now())
 	if err != nil {
 		log.Printf("Error listing events: %v", err)
-		http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(events); err != nil {
-		log.Printf("Error encoding events response: %v", err)
-	}
+	writeJSON(w, http.StatusOK, events)
 }
 
 // handleGetEvent returns a single event by ID.
 func (app *App) handleGetEvent(w http.ResponseWriter, r *http.Request) {
-	idStr := r.PathValue("id")
-	id, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil {
-		http.Error(w, `{"error":"invalid event ID"}`, http.StatusBadRequest)
+	id, ok := pathID(w, r)
+	if !ok {
 		return
 	}
 
 	eventResp, err := repository.GetEvent(r.Context(), app.db, id, time.Now())
-	if err == sql.ErrNoRows {
-		http.Error(w, `{"error":"event not found"}`, http.StatusNotFound)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "event not found")
 		return
 	}
 	if err != nil {
 		log.Printf("Error getting event %d: %v", id, err)
-		http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(eventResp); err != nil {
-		log.Printf("Error encoding event %d response: %v", id, err)
-	}
+	writeJSON(w, http.StatusOK, eventResp)
 }
 
 // handleRetrigger re-publishes an event to trigger a retry notification.
 func (app *App) handleRetrigger(w http.ResponseWriter, r *http.Request) {
-	idStr := r.PathValue("id")
-	id, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil {
-		http.Error(w, `{"error":"invalid event ID"}`, http.StatusBadRequest)
+	id, ok := pathID(w, r)
+	if !ok {
 		return
 	}
 
 	// Get the event from database
 	eventResp, err := repository.GetEvent(r.Context(), app.db, id, time.Now())
-	if err == sql.ErrNoRows {
-		http.Error(w, `{"error":"event not found"}`, http.StatusNotFound)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "event not found")
 		return
 	}
 	if err != nil {
 		log.Printf("Error getting event %d for retrigger: %v", id, err)
-		http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
-	// Build Discovered message from stored event
-	// Note: derefString converts nil EventDate to "" (empty string), which is handled
-	// gracefully by telegram-notifier's message template (simply omits the date line).
-	disc := &event.Discovered{
-		EventID:   eventResp.ID,
-		Slug:      eventResp.Slug,
-		Title:     eventResp.Title,
-		Venue:     derefString(eventResp.Venue),
-		Category:  derefString(eventResp.Category),
-		EventDate: derefString(eventResp.EventDate),
-		URL:       eventResp.URL,
-		ImageURL:  derefString(eventResp.ImageURL),
-		Reason:    event.ReasonManualRetry,
-	}
+	disc := storedEventFrom(eventResp).discovered(event.ReasonManualRetry)
 
 	discBytes, err := json.Marshal(disc)
 	if err != nil {
 		log.Printf("Error marshaling retrigger payload for event %d: %v", id, err)
-		http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
@@ -124,18 +98,14 @@ func (app *App) handleRetrigger(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		log.Printf("Error publishing retrigger for event %d: %v", id, err)
-		http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusAccepted)
-	if err := json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, http.StatusAccepted, map[string]any{
 		"event_id": id,
 		"status":   "pending",
-	}); err != nil {
-		log.Printf("Error encoding retrigger response for event %d: %v", id, err)
-	}
+	})
 }
 
 // maxPurchasedBodyBytes caps the handleSetPurchased body; the real one is
@@ -149,28 +119,26 @@ type setPurchasedRequest struct {
 
 // handleSetPurchased marks an event as purchased or not purchased.
 func (app *App) handleSetPurchased(w http.ResponseWriter, r *http.Request) {
-	idStr := r.PathValue("id")
-	id, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil {
-		http.Error(w, `{"error":"invalid event ID"}`, http.StatusBadRequest)
+	id, ok := pathID(w, r)
+	if !ok {
 		return
 	}
 
 	var body setPurchasedRequest
 	r.Body = http.MaxBytesReader(w, r.Body, maxPurchasedBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	changed, err := repository.SetEventPurchased(r.Context(), app.db, id, body.Purchased)
 	if errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, `{"error":"event not found"}`, http.StatusNotFound)
+		writeError(w, http.StatusNotFound, "event not found")
 		return
 	}
 	if err != nil {
 		log.Printf("Error setting purchased for event %d: %v", id, err)
-		http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
@@ -181,14 +149,10 @@ func (app *App) handleSetPurchased(w http.ResponseWriter, r *http.Request) {
 		app.publishPurchased(r.Context(), id)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"event_id":  id,
 		"purchased": body.Purchased,
-	}); err != nil {
-		log.Printf("Error encoding purchased response for event %d: %v", id, err)
-	}
+	})
 }
 
 // publishPurchased publishes an event.Purchased message for id so
@@ -205,17 +169,7 @@ func (app *App) publishPurchased(reqCtx context.Context, id int64) {
 		return
 	}
 
-	purchased := &event.Purchased{
-		EventID:     eventResp.ID,
-		Slug:        eventResp.Slug,
-		Title:       eventResp.Title,
-		Venue:       derefString(eventResp.Venue),
-		Category:    derefString(eventResp.Category),
-		EventDate:   derefString(eventResp.EventDate),
-		URL:         eventResp.URL,
-		ImageURL:    derefString(eventResp.ImageURL),
-		PurchasedAt: time.Now(),
-	}
+	purchased := storedEventFrom(eventResp).purchased(time.Now().UTC())
 
 	purchasedBytes, err := json.Marshal(purchased)
 	if err != nil {
@@ -253,21 +207,19 @@ func (app *App) markInviteNotQueued(id int64, cause error) {
 // handleDeleteEvent is the dashboard's Remove: it hides the event (see
 // repository.HideEvent) rather than deleting the row.
 func (app *App) handleDeleteEvent(w http.ResponseWriter, r *http.Request) {
-	idStr := r.PathValue("id")
-	id, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil {
-		http.Error(w, `{"error":"invalid event ID"}`, http.StatusBadRequest)
+	id, ok := pathID(w, r)
+	if !ok {
 		return
 	}
 
-	err = repository.HideEvent(r.Context(), app.db, id)
-	if err == sql.ErrNoRows {
-		http.Error(w, `{"error":"event not found"}`, http.StatusNotFound)
+	err := repository.HideEvent(r.Context(), app.db, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "event not found")
 		return
 	}
 	if err != nil {
 		log.Printf("Error hiding event %d: %v", id, err)
-		http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 

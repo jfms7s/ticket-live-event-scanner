@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"log"
 	"net/http"
 
@@ -14,20 +13,16 @@ func (app *App) handleListNotifications(w http.ResponseWriter, r *http.Request) 
 
 	// Validate status parameter
 	if status != "" && status != "pending" && status != "sent" && status != "failed" {
-		http.Error(w, `{"error":"status must be 'pending', 'sent', or 'failed'"}`, http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "status must be 'pending', 'sent', or 'failed'")
 		return
 	}
 
 	notifs, err := repository.ListNotifications(r.Context(), app.db, status)
 	if err != nil {
 		log.Printf("Error listing notifications: %v", err)
-		http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(notifs); err != nil {
-		log.Printf("Error encoding notifications response: %v", err)
-	}
+	writeJSON(w, http.StatusOK, notifs)
 }
