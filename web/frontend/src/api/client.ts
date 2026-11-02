@@ -13,12 +13,12 @@ function baseUrl(): string {
   return url.endsWith('/') ? url.slice(0, -1) : url;
 }
 
-export async function fetchEvents(status: EventStatusFilter): Promise<Event[]> {
+export async function fetchEvents(status: EventStatusFilter, signal?: AbortSignal): Promise<Event[]> {
   let url = `${baseUrl()}/api/events`;
   if (status) {
     url += `?status=${encodeURIComponent(status)}`;
   }
-  const response = await fetch(url);
+  const response = await fetch(url, { signal });
   if (!response.ok) {
     throw new ApiError(`API error: ${response.status}`);
   }

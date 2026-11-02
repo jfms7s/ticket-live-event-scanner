@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ErrorBanner } from './components/ErrorBanner';
+import { TABLE_COLUMN_COUNT } from './components/columns';
 import { EventsTable } from './components/EventsTable';
 import { FilterBar } from './components/FilterBar';
 import { Header } from './components/Header';
@@ -118,7 +119,7 @@ export function App() {
           <table className="events-table">
             <tbody>
               <tr className="loading-row">
-                <td colSpan={9}>
+                <td colSpan={TABLE_COLUMN_COUNT}>
                   <span className="loading-state">
                     <span className="spinner" />
                     Loading events...
