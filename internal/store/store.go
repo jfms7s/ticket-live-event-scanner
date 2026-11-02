@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	_ "github.com/tursodatabase/libsql-client-go/libsql"
-	_ "modernc.org/sqlite"
 )
 
 // Schema is applied with CREATE TABLE IF NOT EXISTS, so it is safe to run

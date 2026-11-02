@@ -39,29 +39,35 @@ jobs:
             dockerfile: web/frontend/Dockerfile
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # The Go images compile natively ($BUILDPLATFORM builder) but their
+      # alpine runtime stages RUN apk/adduser for arm64, which needs
+      # emulation. The frontend's runtime stage only COPYs, so it doesn't.
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        if: matrix.image != 'web-ui-frontend'
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       # Deploy target is an all-Raspberry-Pi (arm64) k3s cluster; amd64 is
       # kept too so images still run on a dev machine / other runners.
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
           push: true
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
           tags: |
             ${{ startsWith(github.ref, 'refs/tags/') && format('ghcr.io/{0}/ticket-live-event-scanner-{1}:{2}', github.repository_owner, matrix.image, github.ref_name) || format('ghcr.io/{0}/ticket-live-event-scanner-{1}:{2}', github.repository_owner, matrix.image, github.sha) }}
