@@ -16,6 +16,7 @@ func TestValidateURLAllowedPaths(t *testing.T) {
 		{baseURL + "/carrinho", true},                    // Not allowed
 		{"https://malicious.com/evento/event-123", true}, // Wrong domain
 		{baseURL + "/admin/users", true},                 // Not allowed
+		{"http://www.ticketline.pt/evento/x", true},      // Plain http under an https base
 	}
 
 	for _, tc := range tests {

@@ -1,91 +1,77 @@
-// Package fetch performs rate-limited, cached HTTP GETs against
-// ticketline.pt, restricted to a small set of allowed paths.
+// Package fetch performs size-capped HTTP GETs against ticketline.pt,
+// restricted to a small set of allowed paths on the base URL's scheme and
+// host, on the first request and on every redirect hop.
 package fetch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"time"
 )
-
-// maxCacheEntries limits the ETag/Last-Modified cache to 200 entries
-// (~5-10 runs worth).
-const maxCacheEntries = 200
 
 // maxBodySize limits response bodies to 5MB to prevent unbounded memory
 // consumption.
 const maxBodySize = 5 * 1024 * 1024
 
-type cacheEntry struct {
-	etag         string
-	lastModified string
-	body         string
-}
+// maxRedirects caps how many redirect hops a single Fetch follows.
+const maxRedirects = 5
 
-// Fetcher performs conditional GETs (ETag/Last-Modified) against a
-// restricted set of allowed paths, caching successful responses so a 304
-// can be served from memory instead of re-downloading the page.
+// Fetcher performs GETs against a restricted set of allowed paths (see
+// validateURL). Redirects are followed only while they stay inside the
+// same allowlist.
 type Fetcher struct {
-	client     *http.Client
-	userAgent  string
-	cache      map[string]*cacheEntry
-	cacheOrder []string // insertion order, for FIFO eviction
+	client    *http.Client
+	userAgent string
 }
 
 // New constructs a Fetcher that sends the given User-Agent and times out
 // requests after timeout.
 func New(userAgent string, timeout time.Duration) *Fetcher {
 	return &Fetcher{
-		client:     &http.Client{Timeout: timeout},
-		userAgent:  userAgent,
-		cache:      make(map[string]*cacheEntry),
-		cacheOrder: make([]string, 0),
+		client: &http.Client{
+			Timeout:       timeout,
+			CheckRedirect: checkRedirect,
+		},
+		userAgent: userAgent,
 	}
 }
 
+// checkRedirect re-applies validateURL to every redirect hop, using the
+// scheme and host of the original request as the base.
+func checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= maxRedirects {
+		return errors.New("too many redirects")
+	}
+	first := via[0].URL
+	base := first.Scheme + "://" + first.Host
+	if err := validateURL(req.URL.String(), base); err != nil {
+		return fmt.Errorf("redirect refused: %w", err)
+	}
+	return nil
+}
+
 // Fetch retrieves urlStr, which must resolve under baseURL to one of the
-// allowed paths (see validateURL). A cached ETag/Last-Modified is sent if
-// present, and a 304 response returns the previously cached body.
+// allowed paths (see validateURL), and returns the body of a 200 response.
 func (f *Fetcher) Fetch(ctx context.Context, urlStr, baseURL string) (string, error) {
 	if err := validateURL(urlStr, baseURL); err != nil {
 		return "", err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
 	if err != nil {
 		return "", err
 	}
 
 	req.Header.Set("User-Agent", f.userAgent)
 
-	// Apply cached ETag/Last-Modified headers for conditional GET
-	if cached, ok := f.cache[urlStr]; ok {
-		if cached.etag != "" {
-			req.Header.Set("If-None-Match", cached.etag)
-		}
-		if cached.lastModified != "" {
-			req.Header.Set("If-Modified-Since", cached.lastModified)
-		}
-	}
-
 	resp, err := f.client.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
-
-	// Handle 304 Not Modified by returning cached content
-	if resp.StatusCode == http.StatusNotModified {
-		if cached, ok := f.cache[urlStr]; ok {
-			log.Printf("Cache hit (304) for %s", urlStr)
-			return cached.body, nil
-		}
-		// Shouldn't happen, but fall through to error
-		return "", fmt.Errorf("got 304 but no cached content for %s", urlStr)
-	}
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
@@ -101,36 +87,5 @@ func (f *Fetcher) Fetch(ctx context.Context, urlStr, baseURL string) (string, er
 		return "", fmt.Errorf("response body exceeds maximum size of %d bytes", maxBodySize)
 	}
 
-	f.cacheResponse(urlStr, resp.Header.Get("ETag"), resp.Header.Get("Last-Modified"), string(body))
-
 	return string(body), nil
-}
-
-func (f *Fetcher) cacheResponse(url, etag, lastModified, body string) {
-	// Check if this is a new URL (not already in cache)
-	isNewURL := true
-	if _, exists := f.cache[url]; exists {
-		isNewURL = false
-	}
-
-	// If at capacity and this is a new URL, remove oldest entry
-	if isNewURL && len(f.cache) >= maxCacheEntries {
-		if len(f.cacheOrder) > 0 {
-			oldest := f.cacheOrder[0]
-			delete(f.cache, oldest)
-			f.cacheOrder = f.cacheOrder[1:]
-		}
-	}
-
-	// Add or update entry
-	f.cache[url] = &cacheEntry{
-		etag:         etag,
-		lastModified: lastModified,
-		body:         body,
-	}
-
-	// Only append to cacheOrder if this is a new URL
-	if isNewURL {
-		f.cacheOrder = append(f.cacheOrder, url)
-	}
 }

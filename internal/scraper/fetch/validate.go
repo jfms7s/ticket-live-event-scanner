@@ -10,7 +10,7 @@ import (
 // permitted to fetch.
 var allowedPathPrefixes = []string{"/agenda", "/pesquisa", "/evento"}
 
-// validateURL checks that urlStr resolves to the same host as baseURL and
+// validateURL checks that urlStr has the same scheme and host as baseURL and
 // that its path starts with one of allowedPathPrefixes.
 func validateURL(urlStr, baseURL string) error {
 	u, err := url.Parse(urlStr)
@@ -21,6 +21,11 @@ func validateURL(urlStr, baseURL string) error {
 	base, err := url.Parse(baseURL)
 	if err != nil {
 		return fmt.Errorf("invalid base URL: %w", err)
+	}
+
+	// Check scheme matches, so an https base never fetches over plain http
+	if u.Scheme != base.Scheme {
+		return fmt.Errorf("URL scheme mismatch: %s vs %s", u.Scheme, base.Scheme)
 	}
 
 	// Check domain matches

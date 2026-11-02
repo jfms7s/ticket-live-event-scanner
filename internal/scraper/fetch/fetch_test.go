@@ -1,90 +1,107 @@
 package fetch
 
-import "testing"
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+)
 
-// TestCacheResponseLRUNoDuplicate tests that caching the same URL twice
-// doesn't add it to cacheOrder twice.
-func TestCacheResponseLRUNoDuplicate(t *testing.T) {
-	f := &Fetcher{
-		cache:      make(map[string]*cacheEntry),
-		cacheOrder: make([]string, 0),
-	}
-
-	// Cache the same URL twice
-	url := "https://example.com/page1"
-	f.cacheResponse(url, "etag1", "lastmod1", "body1")
-	f.cacheResponse(url, "etag2", "lastmod2", "body2")
-
-	// cacheOrder should contain the URL only once
-	if len(f.cacheOrder) != 1 {
-		t.Errorf("Expected cacheOrder to have 1 entry, got %d: %v", len(f.cacheOrder), f.cacheOrder)
-	}
-
-	// The cache should have the updated entry
-	if cached, ok := f.cache[url]; !ok {
-		t.Errorf("Expected URL to be in cache")
-	} else {
-		if cached.etag != "etag2" {
-			t.Errorf("Expected updated etag 'etag2', got %q", cached.etag)
+func TestFetchFollowsSameHostRedirect(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/evento/a":
+			http.Redirect(w, r, "/evento/b", http.StatusFound)
+		case "/evento/b":
+			_, _ = w.Write([]byte("page b"))
+		default:
+			http.NotFound(w, r)
 		}
-		if cached.body != "body2" {
-			t.Errorf("Expected updated body 'body2', got %q", cached.body)
-		}
+	}))
+	defer srv.Close()
+
+	f := New("test-agent", 5*time.Second)
+	body, err := f.Fetch(context.Background(), srv.URL+"/evento/a", srv.URL)
+	if err != nil {
+		t.Fatalf("Fetch: unexpected error: %v", err)
+	}
+	if body != "page b" {
+		t.Errorf("body = %q, want %q", body, "page b")
 	}
 }
 
-// TestCacheResponseLRUUpdateOrder tests that cacheOrder is updated correctly
-// and doesn't create duplicates when refreshing cached entries.
-func TestCacheResponseLRUUpdateOrder(t *testing.T) {
-	f := &Fetcher{
-		cache:      make(map[string]*cacheEntry),
-		cacheOrder: make([]string, 0),
+func TestFetchRefusesOffHostRedirect(t *testing.T) {
+	var offHostHit bool
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		offHostHit = true
+		_, _ = w.Write([]byte("elsewhere"))
+	}))
+	defer other.Close()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/evento/a", http.StatusFound)
+	}))
+	defer srv.Close()
+
+	f := New("test-agent", 5*time.Second)
+	_, err := f.Fetch(context.Background(), srv.URL+"/evento/a", srv.URL)
+	if err == nil {
+		t.Fatal("Fetch: expected an error for an off-host redirect, got nil")
 	}
-
-	// Cache multiple different URLs
-	url1 := "https://example.com/page1"
-	url2 := "https://example.com/page2"
-	url3 := "https://example.com/page3"
-
-	f.cacheResponse(url1, "etag1", "lastmod1", "body1")
-	f.cacheResponse(url2, "etag2", "lastmod2", "body2")
-	f.cacheResponse(url3, "etag3", "lastmod3", "body3")
-
-	expectedOrder := []string{url1, url2, url3}
-	if len(f.cacheOrder) != 3 {
-		t.Errorf("Expected 3 entries in cacheOrder, got %d", len(f.cacheOrder))
+	if !strings.Contains(err.Error(), "redirect refused") {
+		t.Errorf("error = %v, want a refused redirect", err)
 	}
+	if offHostHit {
+		t.Error("the off-host server was requested")
+	}
+}
 
-	for i, url := range expectedOrder {
-		if i < len(f.cacheOrder) && f.cacheOrder[i] != url {
-			t.Errorf("Expected cacheOrder[%d] = %s, got %s", i, url, f.cacheOrder[i])
+func TestFetchRefusesRedirectToDisallowedPath(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/evento/a" {
+			http.Redirect(w, r, "/carrinho", http.StatusFound)
+			return
 		}
-	}
+		_, _ = w.Write([]byte("cart"))
+	}))
+	defer srv.Close()
 
-	// Now refresh url2 - cacheOrder should still have 3 entries, not 4
-	f.cacheResponse(url2, "etag2-updated", "lastmod2-updated", "body2-updated")
-
-	if len(f.cacheOrder) != 3 {
-		t.Errorf("After refresh, expected 3 entries in cacheOrder, got %d", len(f.cacheOrder))
+	f := New("test-agent", 5*time.Second)
+	if _, err := f.Fetch(context.Background(), srv.URL+"/evento/a", srv.URL); err == nil {
+		t.Fatal("Fetch: expected an error for a redirect to a disallowed path, got nil")
 	}
+}
 
-	// Count occurrences of url2 in cacheOrder - should be exactly 1
-	count := 0
-	for _, url := range f.cacheOrder {
-		if url == url2 {
-			count++
-		}
-	}
-	if count != 1 {
-		t.Errorf("Expected url2 to appear once in cacheOrder, got %d times", count)
-	}
+func TestFetchStopsRedirectLoop(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, r.URL.Path, http.StatusFound)
+	}))
+	defer srv.Close()
 
-	// Verify the cache entry was updated
-	if entry, ok := f.cache[url2]; ok {
-		if entry.etag != "etag2-updated" {
-			t.Errorf("Expected etag to be updated, got %s", entry.etag)
-		}
-	} else {
-		t.Errorf("Expected url2 to be in cache")
+	f := New("test-agent", 5*time.Second)
+	_, err := f.Fetch(context.Background(), srv.URL+"/evento/loop", srv.URL)
+	if err == nil || !strings.Contains(err.Error(), "too many redirects") {
+		t.Fatalf("Fetch: error = %v, want too many redirects", err)
+	}
+}
+
+func TestFetchRejectsSchemeMismatch(t *testing.T) {
+	f := New("test-agent", 5*time.Second)
+	if _, err := f.Fetch(context.Background(), "http://www.ticketline.pt/evento/x", "https://www.ticketline.pt"); err == nil {
+		t.Fatal("Fetch: expected a scheme mismatch error, got nil")
+	}
+}
+
+func TestFetchRejectsNonOK(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotModified)
+	}))
+	defer srv.Close()
+
+	f := New("test-agent", 5*time.Second)
+	if _, err := f.Fetch(context.Background(), srv.URL+"/evento/a", srv.URL); err == nil {
+		t.Fatal("Fetch: expected an error for a non-200 response, got nil")
 	}
 }
