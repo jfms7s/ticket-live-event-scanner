@@ -9,11 +9,11 @@ import (
 	"time"
 
 	"github.com/jfms7s/ticket-live-event-scanner/internal/health"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/natsconn"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/notifier/handler"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/shutdown"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/streams"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/telegramnotifier/config"
-	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -29,7 +29,7 @@ func main() {
 	cfg := config.Load()
 
 	// Connect to NATS
-	nc, err := nats.Connect(cfg.NatsURL)
+	nc, err := natsconn.Connect(cfg.NatsURL, "telegram-notifier")
 	if err != nil {
 		log.Fatalf("Failed to connect to NATS: %v", err)
 	}

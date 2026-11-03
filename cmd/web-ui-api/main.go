@@ -21,13 +21,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jfms7s/ticket-live-event-scanner/internal/natsconn"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/shutdown"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/store"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/streams"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/webui/api"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/webui/config"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/webui/consumer"
-	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -59,7 +59,7 @@ func main() {
 	}
 
 	// Connect to NATS
-	nc, err := nats.Connect(cfg.NatsURL)
+	nc, err := natsconn.Connect(cfg.NatsURL, "web-ui-api")
 	if err != nil {
 		log.Fatalf("Failed to connect to NATS: %v", err)
 	}

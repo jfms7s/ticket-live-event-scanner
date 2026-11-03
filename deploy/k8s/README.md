@@ -30,6 +30,11 @@ This directory contains Kubernetes manifests to deploy the ticket-scanner servic
   - JavaScript/frontend server on port 3000 (exposed via Service on port 80)
   - Calls `web-ui-api` internally
   - These manifests define no Ingress
+- **networkpolicy.yaml**: Ingress NetworkPolicies (egress is not restricted)
+  - Default-deny ingress for every pod in the namespace
+  - NATS `4222` only from `scraper`, `telegram-notifier`, `email-notifier` and `web-ui-api` pods
+  - `web-ui-api` `8080` and `web-ui-frontend` `3000` from pods in this namespace and from `kube-system` (k3s Traefik)
+  - The services accept optional NATS credentials (`NATS_TOKEN`, `NATS_USER` + `NATS_PASSWORD`, or `NATS_CREDS`); this broker runs without auth
 - **secrets.example.yaml**: Placeholder Secret templates (see "Secrets" section below)
 - **kustomization.yaml**: Kustomize index, includes all resources
 
@@ -94,7 +99,8 @@ kind load docker-image ticket-scanner/web-ui-frontend:local
 
 # Apply each manifest directly, not via `-k`, so the :local tags aren't rewritten
 kubectl apply -f namespace.yaml -f nats.yaml -f scraper.yaml \
-  -f telegram-notifier.yaml -f email-notifier.yaml -f web-ui-api.yaml -f web-ui-frontend.yaml
+  -f telegram-notifier.yaml -f email-notifier.yaml -f web-ui-api.yaml -f web-ui-frontend.yaml \
+  -f networkpolicy.yaml
 ```
 
 ## Secrets

@@ -7,11 +7,11 @@ import (
 	"os"
 	"time"
 
+	"github.com/jfms7s/ticket-live-event-scanner/internal/natsconn"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/scraper/config"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/scraper/discovery"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/store"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/streams"
-	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -37,7 +37,7 @@ func run(ctx context.Context, cfg config.Config) error {
 	defer db.Close()
 
 	// Initialize NATS connection
-	nc, err := nats.Connect(cfg.NatsURL)
+	nc, err := natsconn.Connect(cfg.NatsURL, "scraper")
 	if err != nil {
 		return fmt.Errorf("connect to nats: %w", err)
 	}
