@@ -16,6 +16,9 @@ const (
 	EventsStreamName = "EVENTS"
 	EventsSubject    = "events.discovered"
 	PurchasedSubject = "events.purchased"
+	// DigestSubject carries the weekly digest from `scraper --digest` to
+	// telegram-notifier (one message a week, already formatted).
+	DigestSubject = "scraper.digest"
 
 	NotificationsStreamName       = "NOTIFICATIONS"
 	NotificationsSentSubject      = "notifications.sent"
@@ -26,6 +29,7 @@ const (
 	// Durable consumer names. Changing one makes JetStream create a new
 	// consumer that replays the stream, so they never change.
 	TelegramConsumerDurableName           = "telegram-notifier"
+	TelegramDigestConsumerDurableName     = "telegram-notifier-digest"
 	EmailConsumerDurableName              = "email-notifier"
 	WebUIEventsConsumerDurableName        = "web-ui-api-events"
 	WebUINotificationsConsumerDurableName = "web-ui-api-notifications"
@@ -65,7 +69,7 @@ func NotificationsSubjects() []string {
 func EventsStreamConfig() jetstream.StreamConfig {
 	return jetstream.StreamConfig{
 		Name:       EventsStreamName,
-		Subjects:   []string{EventsSubject, PurchasedSubject},
+		Subjects:   []string{EventsSubject, PurchasedSubject, DigestSubject},
 		Storage:    jetstream.FileStorage,
 		Retention:  jetstream.LimitsPolicy,
 		MaxAge:     streamMaxAge,
@@ -123,6 +127,15 @@ func consumerConfig(durable string) jetstream.ConsumerConfig {
 func TelegramConsumer() ConsumerSpec {
 	cfg := consumerConfig(TelegramConsumerDurableName)
 	cfg.FilterSubject = EventsSubject
+	return ConsumerSpec{Stream: EventsStreamName, Config: cfg}
+}
+
+// TelegramDigestConsumer is telegram-notifier's consumer of the weekly
+// digest. It is separate from TelegramConsumer, so the digest has its own
+// handler and the event consumer's filter and position stay as they are.
+func TelegramDigestConsumer() ConsumerSpec {
+	cfg := consumerConfig(TelegramDigestConsumerDurableName)
+	cfg.FilterSubject = DigestSubject
 	return ConsumerSpec{Stream: EventsStreamName, Config: cfg}
 }
 

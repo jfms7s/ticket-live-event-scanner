@@ -42,6 +42,7 @@ func TestConsumerSpecs(t *testing.T) {
 		filterSubjects []string
 	}{
 		{"telegram", TelegramConsumer(), "EVENTS", "telegram-notifier", "events.discovered", nil},
+		{"telegram digest", TelegramDigestConsumer(), "EVENTS", "telegram-notifier-digest", "scraper.digest", nil},
 		{"email", EmailConsumer(), "EVENTS", "email-notifier", "events.purchased", nil},
 		{"web-ui events", WebUIEventsConsumer(), "EVENTS", "web-ui-api-events", "events.discovered", nil},
 		{"web-ui notifications", WebUINotificationsConsumer(), "NOTIFICATIONS", "web-ui-api-notifications", "",
@@ -122,5 +123,13 @@ func TestRunsBucketConfig(t *testing.T) {
 	}
 	if cfg.History != 1 || cfg.Storage != jetstream.FileStorage {
 		t.Errorf("History/Storage = %d/%v, want 1/file", cfg.History, cfg.Storage)
+	}
+}
+
+// TestEventsStreamCarriesTheDigest: the digest subject is on EVENTS (whose
+// dedup window drops a second publish of the same week).
+func TestEventsStreamCarriesTheDigest(t *testing.T) {
+	if !slices.Contains(EventsStreamConfig().Subjects, "scraper.digest") {
+		t.Errorf("EVENTS subjects = %v, want scraper.digest", EventsStreamConfig().Subjects)
 	}
 }

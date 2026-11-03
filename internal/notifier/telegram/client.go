@@ -57,6 +57,30 @@ func sendTelegramMessage(ctx context.Context, client *http.Client, apiBaseURL, c
 		}
 	}
 
+	return post(ctx, client, apiBaseURL, method, data)
+}
+
+// SendText sends text (Telegram HTML, already escaped by the caller) as a
+// plain message with link previews off, and returns its message_id. It is
+// for the weekly digest, which the scraper formats.
+func SendText(ctx context.Context, botToken, chatID, text string) (string, error) {
+	client := &http.Client{Timeout: 20 * time.Second}
+	apiBaseURL := fmt.Sprintf("https://api.telegram.org/bot%s", botToken)
+	return sendText(ctx, client, apiBaseURL, chatID, text)
+}
+
+func sendText(ctx context.Context, client *http.Client, apiBaseURL, chatID, text string) (string, error) {
+	return post(ctx, client, apiBaseURL, "sendMessage", url.Values{
+		"chat_id":                  {chatID},
+		"text":                     {text},
+		"parse_mode":               {"HTML"},
+		"disable_web_page_preview": {"true"},
+	})
+}
+
+// post calls a Bot API method with form data and returns the sent
+// message's message_id.
+func post(ctx context.Context, client *http.Client, apiBaseURL, method string, data url.Values) (string, error) {
 	apiURL := fmt.Sprintf("%s/%s", apiBaseURL, method)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, strings.NewReader(data.Encode()))

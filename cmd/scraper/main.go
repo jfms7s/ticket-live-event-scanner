@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/jfms7s/ticket-live-event-scanner/internal/natsconn"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/runs"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/scraper/config"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/scraper/digest"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/scraper/discovery"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/store"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/streams"
@@ -27,9 +29,16 @@ func main() {
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
+	digestMode := flag.Bool("digest", false, "send the weekly digest to telegram-notifier instead of scraping")
+	flag.Parse()
+
 	cfg := config.Load()
 
-	if err := run(ctx, cfg); err != nil {
+	runMode := run
+	if *digestMode {
+		runMode = runDigest
+	}
+	if err := runMode(ctx, cfg); err != nil {
 		log.Printf("ERROR: %v", err)
 		os.Exit(1)
 	}
@@ -125,6 +134,37 @@ func run(ctx context.Context, cfg config.Config) (err error) {
 		scraper.Stats.Errors)
 
 	return nil
+}
+
+// runDigest is `scraper --digest`: build this week's digest from the
+// events table and the run log and publish it once for telegram-notifier
+// (see package digest). It scrapes nothing and records no run.
+func runDigest(ctx context.Context, cfg config.Config) error {
+	nc, err := natsconn.Connect(cfg.NatsURL, "scraper-digest")
+	if err != nil {
+		return fmt.Errorf("connect to nats: %w", err)
+	}
+	defer nc.Close()
+
+	js, err := jetstream.New(nc)
+	if err != nil {
+		return fmt.Errorf("create jetstream context: %w", err)
+	}
+	if err := streams.EnsureStreams(ctx, js); err != nil {
+		return fmt.Errorf("ensure streams: %w", err)
+	}
+	runsKV, err := streams.EnsureRunsBucket(ctx, js)
+	if err != nil {
+		return fmt.Errorf("ensure runs bucket: %w", err)
+	}
+
+	db, err := store.Connect(cfg.TursoDatabaseURL, cfg.TursoAuthToken)
+	if err != nil {
+		return fmt.Errorf("connect to turso (check credentials): %w", err)
+	}
+	defer db.Close()
+
+	return digest.Send(ctx, db, runs.NewReader(runsKV), js, time.Now())
 }
 
 // redactor returns a function that removes the database auth token from
