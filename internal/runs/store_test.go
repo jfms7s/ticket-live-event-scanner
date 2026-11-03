@@ -145,8 +145,9 @@ func TestSummaryLatestIsTheNewestRunPerHub(t *testing.T) {
 	write(t, kv,
 		rec(1, 0, 3, ""), rec(2, 0, 4, ""),
 		rec(1, 1, 3, ""), rec(2, 1, 0, "fetch hub page 2: timeout"),
-		// A hub dropped from the config: not in the newest run.
-		rec(9, 0, 5, ""),
+		// A hub dropped from the config: its last record is hours older
+		// than the newest run.
+		rec(9, -5, 5, ""),
 	)
 	sum, err := NewReader(kv).Summary(context.Background(), 3)
 	if err != nil {
@@ -339,4 +340,54 @@ func TestReaderIsSafeForConcurrentUse(t *testing.T) {
 		}(g)
 	}
 	wg.Wait()
+}
+
+// TestSummaryKeepsAHubWhoseNewestPutFailed: hub 2's record of the newest
+// run was never written; it must stay visible on its previous record.
+func TestSummaryKeepsAHubWhoseNewestPutFailed(t *testing.T) {
+	kv := newMemKV()
+	write(t, kv, rec(1, 0, 1, ""), rec(2, 0, 0, "boom"), rec(1, 1, 1, ""))
+	sum, err := NewReader(kv).Summary(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sum.Latest) != 2 || !sum.Latest[1].Failed() {
+		t.Errorf("Latest = %+v, want both hubs, hub 2 still failing", sum.Latest)
+	}
+}
+
+// TestRetriesInOneHourCountAsOneEmptyRun: a failed run retried twice in
+// the same hour must not reach the empty threshold on its own.
+func TestRetriesInOneHourCountAsOneEmptyRun(t *testing.T) {
+	kv := newMemKV()
+	base := rec(1, 0, 0, "")
+	for i := 0; i < 3; i++ {
+		r := base
+		r.StartedAt = base.StartedAt.Add(time.Duration(i) * time.Minute)
+		write(t, kv, r)
+	}
+	sum, err := NewReader(kv).Summary(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sum.Latest[0].ConsecutiveEmptyRuns; got != 1 {
+		t.Errorf("ConsecutiveEmptyRuns = %d for three attempts in one hour, want 1", got)
+	}
+}
+
+// TestLastSuccessAfterTwoDaysOfFailures: the walk reaches a success older
+// than two days of hourly failures.
+func TestLastSuccessAfterTwoDaysOfFailures(t *testing.T) {
+	kv := newMemKV()
+	write(t, kv, rec(1, 0, 2, ""))
+	for i := 1; i <= 60; i++ {
+		write(t, kv, rec(1, i, 0, "boom"))
+	}
+	sum, err := NewReader(kv).Summary(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum.Latest[0].LastSuccessAt == nil {
+		t.Error("LastSuccessAt = nil, want the success 60 runs back")
+	}
 }

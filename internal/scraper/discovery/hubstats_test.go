@@ -140,3 +140,11 @@ func TestRunRecordsTruncatesLongErrors(t *testing.T) {
 		t.Errorf("truncated error %q has no ellipsis", recs[0].Error)
 	}
 }
+
+func TestRunRecordsKeepsOneRecordPerHubID(t *testing.T) {
+	recs := RunRecords([]string{"bad-a", "maia-1", "bad-b", "maia-1"}, nil, time.Now(), time.Now(),
+		errors.New("boom"), func(s string) string { return s })
+	if len(recs) != 2 || recs[0].HubSlug != "bad-a" || recs[1].HubID != 1 {
+		t.Errorf("RunRecords = %+v, want bad-a (id 0) and maia-1 once each", recs)
+	}
+}

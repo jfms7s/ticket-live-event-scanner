@@ -26,6 +26,7 @@ func RunRecords(hubPages []string, hubs []HubStats, start, finish time.Time, run
 	runID := runs.RunID(start)
 
 	records := make([]runs.Record, 0, len(hubPages))
+	keyed := map[int64]bool{}
 	for _, slug := range hubPages {
 		h, ok := reached[slug]
 		if !ok {
@@ -34,6 +35,13 @@ func RunRecords(hubPages []string, hubs []HubStats, start, finish time.Time, run
 				h.Err = errNotReached
 			}
 		}
+		// The key is the hub ID: a hub listed twice, or a second slug
+		// without an ID (both ID 0), would overwrite the first record.
+		// Keep the first; the run's error and log name the others.
+		if keyed[h.ID] {
+			continue
+		}
+		keyed[h.ID] = true
 		r := runs.Record{
 			RunID:          runID,
 			HubID:          h.ID,

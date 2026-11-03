@@ -47,11 +47,19 @@ type KV interface {
 const EmptyRunsThreshold = 3
 
 // maxWalk bounds how many older records of one hub a read fetches while
-// looking for its last success and its last non-empty run.
-const maxWalk = 48
+// looking for its last success and its last non-empty run. It covers the
+// whole bucket (8 days of hourly runs, plus retries); records are cached,
+// so only the first read after a start pays for it.
+const maxWalk = 400
 
-// HubStatus is a hub of the newest run: its newest record plus what the
-// older ones say.
+// currentWindow is how far a hub's newest record may lag the newest run and
+// still count as a current hub: a hub whose record of the newest run was
+// not written (a failed put) stays visible, while a hub dropped from the
+// config leaves after a few hours.
+const currentWindow = 3 * time.Hour
+
+// HubStatus is a current hub (one with a record within a few hours of the
+// newest run): its newest record plus what the older ones say.
 type HubStatus struct {
 	Record
 	// LastSuccessAt is when the hub last finished a run without an error,
@@ -62,9 +70,9 @@ type HubStatus struct {
 	// successful run (0 when there is none).
 	UpcomingSessions int `json:"upcoming_sessions"`
 	// ConsecutiveEmptyRuns counts the hub's successful runs in a row,
-	// newest first, that listed no future session. Failed runs in between
-	// are skipped, not counted. It is a lower bound once it reaches the
-	// walk limit.
+	// newest first, that listed no future session, at most one per clock
+	// hour (a retry is not a new hourly run). Failed runs in between are
+	// skipped, not counted.
 	ConsecutiveEmptyRuns int `json:"consecutive_empty_runs"`
 }
 
@@ -74,7 +82,7 @@ func (h HubStatus) Empty() bool { return h.ConsecutiveEmptyRuns >= EmptyRunsThre
 
 // Summary is what GET /api/runs serves.
 type Summary struct {
-	// Latest has one entry per hub of the newest run, ordered by hub slug.
+	// Latest has one entry per current hub, ordered by hub slug.
 	Latest []HubStatus `json:"latest"`
 	// Runs has the newest records, newest first.
 	Runs []Record `json:"runs"`
@@ -95,7 +103,7 @@ func NewReader(kv KV) *Reader {
 	return &Reader{kv: kv, cache: map[string]Record{}}
 }
 
-// Summary returns the newest run's hubs and the newest limit records.
+// Summary returns the current hubs and the newest limit records.
 func (r *Reader) Summary(ctx context.Context, limit int) (Summary, error) {
 	keys, err := r.listKeys(ctx)
 	if err != nil {
@@ -119,11 +127,11 @@ func (r *Reader) Summary(ctx context.Context, limit int) (Summary, error) {
 		byHub[k.hubID] = append(byHub[k.hubID], k)
 	}
 	newest := keys[0].startMS
-	for _, k := range keys {
-		if k.startMS != newest {
-			break
+	for _, hubKeys := range byHub {
+		if newest-hubKeys[0].startMS > currentWindow.Milliseconds() {
+			continue
 		}
-		status, ok, err := r.hubStatus(ctx, byHub[k.hubID])
+		status, ok, err := r.hubStatus(ctx, hubKeys)
 		if err != nil {
 			return Summary{}, err
 		}
@@ -131,7 +139,12 @@ func (r *Reader) Summary(ctx context.Context, limit int) (Summary, error) {
 			sum.Latest = append(sum.Latest, status)
 		}
 	}
-	slices.SortFunc(sum.Latest, func(a, b HubStatus) int { return cmp.Compare(a.HubSlug, b.HubSlug) })
+	slices.SortFunc(sum.Latest, func(a, b HubStatus) int {
+		if c := cmp.Compare(a.HubSlug, b.HubSlug); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.HubID, b.HubID)
+	})
 
 	for _, k := range keys {
 		if len(sum.Runs) >= limit {
@@ -189,6 +202,9 @@ func (r *Reader) hubStatus(ctx context.Context, keys []key) (HubStatus, bool, er
 	status := HubStatus{Record: newest}
 
 	counting := true // still in the run of empty successes
+	// A CronJob retry is a second run in the same scheduled hour; count
+	// at most one empty run per hour so retries don't hasten the alert.
+	lastEmptyHour := int64(-1)
 	for i, k := range keys {
 		if i >= maxWalk || (!counting && status.LastSuccessAt != nil) {
 			break
@@ -207,7 +223,10 @@ func (r *Reader) hubStatus(ctx context.Context, keys []key) (HubStatus, bool, er
 		}
 		if counting {
 			if rec.FutureSessions == 0 {
-				status.ConsecutiveEmptyRuns++
+				if hour := k.startMS / time.Hour.Milliseconds(); hour != lastEmptyHour {
+					status.ConsecutiveEmptyRuns++
+					lastEmptyHour = hour
+				}
 			} else {
 				counting = false
 			}

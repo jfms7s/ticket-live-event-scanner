@@ -12,8 +12,14 @@ export function RunStatus() {
     return () => clearInterval(id);
   }, []);
 
-  if (error && latest === null) {
-    return <p className="run-status run-status-unknown">Run status unavailable</p>;
+  // A failed poll must not leave a stale green line up.
+  if (error) {
+    return (
+      <p className="run-status run-status-unknown" role="status">
+        <span className="run-status-dot" aria-hidden="true" />
+        Run status unavailable
+      </p>
+    );
   }
   if (latest === null) {
     return null;

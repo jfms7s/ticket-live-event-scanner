@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/jfms7s/ticket-live-event-scanner/internal/natsconn"
@@ -20,6 +22,10 @@ import (
 func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
+	// A node drain or eviction sends SIGTERM: cancel the run so it returns
+	// and its deferred run record is written before the process exits.
+	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
 
 	cfg := config.Load()
 
