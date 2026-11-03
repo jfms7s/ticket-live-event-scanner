@@ -1,3 +1,4 @@
+import { RunStatus } from './RunStatus';
 import { ThemeToggle } from './ThemeToggle';
 
 export function Header() {
@@ -6,6 +7,7 @@ export function Header() {
       <div className="header-text">
         <h1>Ticket Live Event Scanner</h1>
         <p>Event Discovery &amp; Notification Dashboard</p>
+        <RunStatus />
       </div>
       <ThemeToggle />
     </header>

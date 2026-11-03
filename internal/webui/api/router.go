@@ -19,5 +19,8 @@ func (app *App) NewMux() *http.ServeMux {
 	// Notifications API
 	mux.HandleFunc("GET /api/notifications", app.handleListNotifications)
 
+	// Scraper run log
+	mux.HandleFunc("GET /api/runs", app.handleListRuns)
+
 	return mux
 }

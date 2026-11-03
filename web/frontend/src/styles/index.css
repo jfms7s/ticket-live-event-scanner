@@ -138,6 +138,44 @@ header p {
   color: var(--color-text-muted);
 }
 
+/* The scraper's run status (RunStatus): its own line under the title. */
+header p.run-status {
+  flex-basis: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+}
+
+.run-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background-color: var(--color-text-faint);
+}
+
+.run-status-ok .run-status-dot {
+  background-color: var(--color-success);
+}
+
+.run-status-warn {
+  color: var(--color-warning) !important;
+}
+
+.run-status-warn .run-status-dot {
+  background-color: var(--color-warning);
+}
+
+.run-status-bad {
+  color: var(--color-danger) !important;
+  font-weight: 600;
+}
+
+.run-status-bad .run-status-dot {
+  background-color: var(--color-danger);
+}
+
 .theme-toggle {
   display: inline-flex;
   align-items: center;

@@ -34,11 +34,15 @@ type hubSite struct {
 	detail map[int64]http.HandlerFunc
 	// detailFetches counts requests per detail page.
 	detailFetches map[int64]int
+	// cardDates overrides a session card's start date (default 2030-01-01).
+	cardDates map[int64]string
+	// hubStatus, when set, is the hub page's HTTP status.
+	hubStatus int
 }
 
 func newHubSite(t *testing.T, ids ...int64) *hubSite {
 	t.Helper()
-	h := &hubSite{ids: ids, detail: map[int64]http.HandlerFunc{}, detailFetches: map[int64]int{}}
+	h := &hubSite{ids: ids, detail: map[int64]http.HandlerFunc{}, detailFetches: map[int64]int{}, cardDates: map[int64]string{}}
 	h.srv = httptest.NewServer(http.HandlerFunc(h.serve))
 	t.Cleanup(h.srv.Close)
 	return h
@@ -59,16 +63,29 @@ func (h *hubSite) serve(w http.ResponseWriter, r *http.Request) {
 	if slug == hubSlug {
 		h.mu.Lock()
 		ids := append([]int64(nil), h.ids...)
+		status := h.hubStatus
+		dates := make(map[int64]string, len(h.cardDates))
+		for id, d := range h.cardDates {
+			dates[id] = d
+		}
 		h.mu.Unlock()
+		if status != 0 {
+			w.WriteHeader(status)
+			return
+		}
 		var b strings.Builder
 		b.WriteString("<html><body><ul>")
 		for _, id := range ids {
+			date := dates[id]
+			if date == "" {
+				date = "2030-01-01"
+			}
 			fmt.Fprintf(&b, `<li itemscope itemtype="http://schema.org/Event">
 	<a itemprop="url" href="/evento/session-%d">
 		<h3 itemprop="name">Session %d</h3>
-		<span itemprop="startDate" content="2030-01-01">1 Jan 2030</span>
+		<span itemprop="startDate" content="%s">%s</span>
 	</a>
-</li>`, id, id)
+</li>`, id, id, date, date)
 		}
 		b.WriteString("</ul></body></html>")
 		fmt.Fprint(w, b.String())
