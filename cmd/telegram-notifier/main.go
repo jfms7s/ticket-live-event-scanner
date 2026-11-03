@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -56,8 +57,15 @@ func main() {
 		log.Fatalf("Failed to ensure consumer: %v", err)
 	}
 
+	// The weekly digest from `scraper --digest` has its own consumer.
+	digestConsumer, err := streams.EnsureConsumer(ctx, js, streams.TelegramDigestConsumer())
+	if err != nil {
+		log.Fatalf("Failed to ensure digest consumer: %v", err)
+	}
+
 	// Create handler
 	h := handler.New(cfg.BotToken, cfg.ChatID, js)
+	digestHandler := handler.NewDigest(cfg.BotToken, cfg.ChatID)
 	h.SetMinSendInterval(cfg.MinSendInterval)
 	log.Printf("Minimum interval between Telegram sends: %v", cfg.MinSendInterval)
 
@@ -68,9 +76,17 @@ func main() {
 	// Start cache cleanup goroutine (removes stale entries every 30 seconds)
 	go h.CleanupCache(ctx)
 
-	// Refresh the liveness file while NATS and the consumer are reachable,
-	// so the probe fails when the notifier can no longer receive messages.
-	go health.Heartbeat(ctx, health.File(), healthInterval, health.NATSConsumerCheck(nc.Status, consumer))
+	// Refresh the liveness file while NATS and both consumers are
+	// reachable, so the probe fails when the notifier can no longer
+	// receive events or the digest.
+	eventsCheck := health.NATSConsumerCheck(nc.Status, consumer)
+	digestCheck := health.NATSConsumerCheck(nc.Status, digestConsumer)
+	go health.Heartbeat(ctx, health.File(), healthInterval, func(ctx context.Context) error {
+		if err := eventsCheck(ctx); err != nil {
+			return err
+		}
+		return digestCheck(ctx)
+	})
 
 	// Start consuming messages
 	go func() {
@@ -79,13 +95,20 @@ func main() {
 		cancel()
 	}()
 
-	// Consume messages
-	log.Println("Starting to consume events...")
-	consumeMessages(ctx, consumer, h)
+	// Consume messages: events and the digest, each until shutdown.
+	log.Println("Starting to consume events and digests...")
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		consumeMessages(ctx, "digest", digestConsumer, digestHandler.HandleMessage)
+	}()
+	consumeMessages(ctx, "events", consumer, h.HandleMessage)
+	wg.Wait()
 	log.Println("Shutdown complete")
 }
 
-func consumeMessages(ctx context.Context, consumer jetstream.Consumer, h *handler.Handler) {
+func consumeMessages(ctx context.Context, name string, consumer jetstream.Consumer, handle func(context.Context, jetstream.Msg) error) {
 	// Messages in hand run on workCtx, not ctx: a shutdown stops new
 	// deliveries but lets a send in progress finish and be acked, so it
 	// isn't redelivered (and sent twice) after the restart.
@@ -96,12 +119,12 @@ func consumeMessages(ctx context.Context, consumer jetstream.Consumer, h *handle
 	consumeCtx, err := consumer.Consume(
 		func(msg jetstream.Msg) {
 			// Process the message in the callback
-			if err := h.HandleMessage(workCtx, msg); err != nil {
-				log.Printf("Error handling message: %v", err)
+			if err := handle(workCtx, msg); err != nil {
+				log.Printf("Error handling %s message: %v", name, err)
 			}
 		},
 		jetstream.ConsumeErrHandler(func(consumeCtx jetstream.ConsumeContext, err error) {
-			log.Printf("Consume error: %v", err)
+			log.Printf("Consume error (%s): %v", name, err)
 		}),
 		// Messages are handled one at a time, so buffer one: on shutdown
 		// Drain() then finishes the message in hand (and at most one
@@ -110,7 +133,7 @@ func consumeMessages(ctx context.Context, consumer jetstream.Consumer, h *handle
 	)
 
 	if err != nil {
-		log.Fatalf("Failed to consume messages: %v", err)
+		log.Fatalf("Failed to consume %s messages: %v", name, err)
 	}
 
 	// Wait for context cancellation
@@ -121,12 +144,12 @@ func consumeMessages(ctx context.Context, consumer jetstream.Consumer, h *handle
 	// past the bound, cancel the send and let JetStream redeliver it.
 	consumeCtx.Drain()
 	if shutdown.WaitOrTimeout(consumeCtx.Closed(), drainTimeout) {
-		log.Println("Consumer drained")
+		log.Printf("%s consumer drained", name)
 		return
 	}
-	log.Printf("Consumer still busy after %v; cancelling the message in progress", drainTimeout)
+	log.Printf("%s consumer still busy after %v; cancelling the message in progress", name, drainTimeout)
 	workCancel()
 	if !shutdown.WaitOrTimeout(consumeCtx.Closed(), 2*time.Second) {
-		log.Println("Consumer did not stop; closing the connection anyway")
+		log.Printf("%s consumer did not stop; closing the connection anyway", name)
 	}
 }

@@ -17,6 +17,14 @@ const (
 	EventsSubject    = "events.discovered"
 	PurchasedSubject = "events.purchased"
 
+	// DigestStreamName / DigestSubject carry the weekly digest from
+	// `scraper --digest` to telegram-notifier (one message a week, already
+	// formatted). A stream of its own: EnsureStreams replaces a stream's
+	// whole subject list, so on EVENTS any older image starting up would
+	// drop the subject; older images never touch DIGEST.
+	DigestStreamName = "DIGEST"
+	DigestSubject    = "scraper.digest"
+
 	NotificationsStreamName       = "NOTIFICATIONS"
 	NotificationsSentSubject      = "notifications.sent"
 	NotificationsFailSubject      = "notifications.failed"
@@ -26,6 +34,7 @@ const (
 	// Durable consumer names. Changing one makes JetStream create a new
 	// consumer that replays the stream, so they never change.
 	TelegramConsumerDurableName           = "telegram-notifier"
+	TelegramDigestConsumerDurableName     = "telegram-notifier-digest"
 	EmailConsumerDurableName              = "email-notifier"
 	WebUIEventsConsumerDurableName        = "web-ui-api-events"
 	WebUINotificationsConsumerDurableName = "web-ui-api-notifications"
@@ -84,7 +93,23 @@ func NotificationsStreamConfig() jetstream.StreamConfig {
 	}
 }
 
-// EnsureStreams creates or updates the EVENTS and NOTIFICATIONS streams.
+// digestDedupWindow covers a week, so a second publish with the same
+// digest-<ISO week> message ID is dropped.
+const digestDedupWindow = 7 * 24 * time.Hour
+
+// DigestStreamConfig is the DIGEST stream's config.
+func DigestStreamConfig() jetstream.StreamConfig {
+	return jetstream.StreamConfig{
+		Name:       DigestStreamName,
+		Subjects:   []string{DigestSubject},
+		Storage:    jetstream.FileStorage,
+		Retention:  jetstream.LimitsPolicy,
+		MaxAge:     30 * 24 * time.Hour,
+		Duplicates: digestDedupWindow,
+	}
+}
+
+// EnsureStreams creates or updates the EVENTS, NOTIFICATIONS and DIGEST streams.
 // Safe to call from every service on startup; JetStream treats it as a
 // no-op when the config already matches.
 func EnsureStreams(ctx context.Context, js jetstream.JetStream) error {
@@ -94,6 +119,10 @@ func EnsureStreams(ctx context.Context, js jetstream.JetStream) error {
 
 	if _, err := js.CreateOrUpdateStream(ctx, NotificationsStreamConfig()); err != nil {
 		return fmt.Errorf("ensure %s stream: %w", NotificationsStreamName, err)
+	}
+
+	if _, err := js.CreateOrUpdateStream(ctx, DigestStreamConfig()); err != nil {
+		return fmt.Errorf("ensure %s stream: %w", DigestStreamName, err)
 	}
 
 	return nil
@@ -124,6 +153,15 @@ func TelegramConsumer() ConsumerSpec {
 	cfg := consumerConfig(TelegramConsumerDurableName)
 	cfg.FilterSubject = EventsSubject
 	return ConsumerSpec{Stream: EventsStreamName, Config: cfg}
+}
+
+// TelegramDigestConsumer is telegram-notifier's consumer of the weekly
+// digest. It is separate from TelegramConsumer, so the digest has its own
+// handler and the event consumer's filter and position stay as they are.
+func TelegramDigestConsumer() ConsumerSpec {
+	cfg := consumerConfig(TelegramDigestConsumerDurableName)
+	cfg.FilterSubject = DigestSubject
+	return ConsumerSpec{Stream: DigestStreamName, Config: cfg}
 }
 
 // EmailConsumer is email-notifier's consumer of events.purchased.

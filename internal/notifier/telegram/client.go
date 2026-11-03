@@ -57,6 +57,30 @@ func sendTelegramMessage(ctx context.Context, client *http.Client, apiBaseURL, c
 		}
 	}
 
+	return post(ctx, client, apiBaseURL, method, data)
+}
+
+// SendText sends text (Telegram HTML, already escaped by the caller) as a
+// plain message with link previews off, and returns its message_id. It is
+// for the weekly digest, which the scraper formats.
+func SendText(ctx context.Context, botToken, chatID, text string) (string, error) {
+	client := &http.Client{Timeout: 20 * time.Second}
+	apiBaseURL := fmt.Sprintf("https://api.telegram.org/bot%s", botToken)
+	return sendText(ctx, client, apiBaseURL, chatID, text)
+}
+
+func sendText(ctx context.Context, client *http.Client, apiBaseURL, chatID, text string) (string, error) {
+	return post(ctx, client, apiBaseURL, "sendMessage", url.Values{
+		"chat_id":                  {chatID},
+		"text":                     {text},
+		"parse_mode":               {"HTML"},
+		"disable_web_page_preview": {"true"},
+	})
+}
+
+// post calls a Bot API method with form data and returns the sent
+// message's message_id.
+func post(ctx context.Context, client *http.Client, apiBaseURL, method string, data url.Values) (string, error) {
 	apiURL := fmt.Sprintf("%s/%s", apiBaseURL, method)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, strings.NewReader(data.Encode()))
@@ -68,13 +92,13 @@ func sendTelegramMessage(ctx context.Context, client *http.Client, apiBaseURL, c
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", requestError(method, apiBaseURL, err)
+		return "", fmt.Errorf("%w: %w", ErrDeliveryUnknown, requestError(method, apiBaseURL, err))
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("read response body: %w", err)
+		return "", fmt.Errorf("%w: read response body: %w", ErrDeliveryUnknown, err)
 	}
 
 	if resp.StatusCode == http.StatusTooManyRequests {
@@ -109,6 +133,12 @@ func sendTelegramMessage(ctx context.Context, client *http.Client, apiBaseURL, c
 
 	return strconv.FormatInt(telegramResp.Result.MessageID, 10), nil
 }
+
+// ErrDeliveryUnknown marks a failure after the request may have reached
+// Telegram (a transport error or timeout, a cut-off response): the message
+// may have been delivered. sendMessage has no idempotency key, so a caller
+// that must not post twice should not retry these.
+var ErrDeliveryUnknown = errors.New("telegram delivery unknown")
 
 // requestError wraps a request-creation or transport error without the
 // request URL, which embeds the bot token. net/http returns these as

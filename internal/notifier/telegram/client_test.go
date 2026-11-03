@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -233,5 +234,31 @@ func TestSendTelegramMessageMalformedJSON(t *testing.T) {
 
 	if messageID != "" {
 		t.Errorf("expected empty messageID on error, got %s", messageID)
+	}
+}
+
+func TestSendTextSendsHTMLWithoutPreviews(t *testing.T) {
+	var form map[string]string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/sendMessage") {
+			t.Errorf("path = %s, want sendMessage", r.URL.Path)
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		form = map[string]string{}
+		for k := range r.PostForm {
+			form[k] = r.PostForm.Get(k)
+		}
+		fmt.Fprint(w, `{"ok":true,"result":{"message_id":77}}`)
+	}))
+	defer server.Close()
+
+	id, err := sendText(context.Background(), server.Client(), server.URL+"/botTOKEN", "chat", "<b>Week</b>")
+	if err != nil || id != "77" {
+		t.Fatalf("sendText = %q, %v", id, err)
+	}
+	if form["text"] != "<b>Week</b>" || form["parse_mode"] != "HTML" || form["disable_web_page_preview"] != "true" || form["chat_id"] != "chat" {
+		t.Errorf("form = %v", form)
 	}
 }

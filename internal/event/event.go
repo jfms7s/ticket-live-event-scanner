@@ -7,6 +7,7 @@
 //     notifications.sent / notifications.failed.
 //   - email-notifier consumes events.purchased and publishes
 //     notifications.email.sent / notifications.email.failed.
+//   - scraper --digest publishes scraper.digest; telegram-notifier sends it.
 //   - web-ui-api consumes events.discovered and every notifications.*
 //     subject, and publishes events.discovered (manual retrigger) and
 //     events.purchased.
@@ -89,4 +90,18 @@ type EmailFailed struct {
 	Error    string    `json:"error"`
 	FailedAt time.Time `json:"failed_at"`
 	Attempts int       `json:"attempts"`
+}
+
+// Digest is published to subject "scraper.digest" by `scraper --digest`
+// once a week and sent by telegram-notifier as is.
+type Digest struct {
+	// Week is the ISO week it covers, e.g. "2026-W45"; it is also the
+	// message ID, so a second publish for the same week is dropped.
+	Week string `json:"week"`
+	// Text is the message in Telegram HTML, escaped and under 4096
+	// characters.
+	Text string `json:"text"`
+	// GeneratedAt is when it was built; telegram-notifier drops a digest
+	// too old to be news (held while it was down).
+	GeneratedAt time.Time `json:"generated_at"`
 }
