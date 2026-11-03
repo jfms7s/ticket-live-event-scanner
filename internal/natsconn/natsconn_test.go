@@ -113,3 +113,57 @@ func TestOptionsFromEnvRejectsBadCombinations(t *testing.T) {
 		})
 	}
 }
+
+func TestConnectRedactsURLUserinfo(t *testing.T) {
+	t.Setenv("NATS_TOKEN", "")
+	t.Setenv("NATS_USER", "")
+	t.Setenv("NATS_PASSWORD", "")
+	t.Setenv("NATS_CREDS", "")
+	// An invalid port makes nats.go fail while parsing, echoing the URL.
+	_, err := Connect("nats://app:s3cret@nats:abc", "scraper")
+	if err == nil {
+		t.Fatal("want error, got nil")
+	}
+	if strings.Contains(err.Error(), "s3cret") {
+		t.Errorf("error %q leaks the URL password", err)
+	}
+	if !strings.Contains(err.Error(), "REDACTED") {
+		t.Errorf("error %q: want the userinfo replaced by REDACTED", err)
+	}
+}
+
+func TestConnectRejectsEnvCredentialsWithURLUserinfo(t *testing.T) {
+	t.Setenv("NATS_TOKEN", "tok")
+	t.Setenv("NATS_USER", "")
+	t.Setenv("NATS_PASSWORD", "")
+	t.Setenv("NATS_CREDS", "")
+	for _, url := range []string{
+		"nats://other:pw@nats:4222",
+		"nats://nats-a:4222, nats://tok2@nats-b:4222",
+	} {
+		_, err := Connect(url, "scraper")
+		if err == nil || !strings.Contains(err.Error(), "NATS_URL carries credentials") {
+			t.Errorf("%s: err = %v, want the URL-credentials error", url, err)
+		}
+		if err != nil && (strings.Contains(err.Error(), "pw") || strings.Contains(err.Error(), "tok2")) {
+			t.Errorf("%s: error %q leaks a credential", url, err)
+		}
+	}
+}
+
+func TestURLUserinfo(t *testing.T) {
+	cases := map[string][]string{
+		"nats://nats:4222":                nil,
+		"nats://u:p@nats:4222":            {"u:p"},
+		"nats://tok@nats:4222/path@x":     {"tok"},
+		"nats://a:4222,nats://u:p@b:4222": {"u:p"},
+		"u:p@nats:4222":                   {"u:p"},
+		"nats://u:p@w@nats:4222":          {"u:p@w"},
+	}
+	for in, want := range cases {
+		got := urlUserinfo(in)
+		if strings.Join(got, "|") != strings.Join(want, "|") {
+			t.Errorf("urlUserinfo(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
