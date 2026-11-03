@@ -19,8 +19,9 @@ func (app *App) NewMux() *http.ServeMux {
 	// Notifications API
 	mux.HandleFunc("GET /api/notifications", app.handleListNotifications)
 
-	// Scraper run log
+	// Scraper run log, and its health for Prometheus
 	mux.HandleFunc("GET /api/runs", app.handleListRuns)
+	mux.HandleFunc("GET /metrics", app.handleMetrics)
 
 	return mux
 }
