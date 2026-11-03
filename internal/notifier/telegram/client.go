@@ -92,13 +92,13 @@ func post(ctx context.Context, client *http.Client, apiBaseURL, method string, d
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", requestError(method, apiBaseURL, err)
+		return "", fmt.Errorf("%w: %w", ErrDeliveryUnknown, requestError(method, apiBaseURL, err))
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("read response body: %w", err)
+		return "", fmt.Errorf("%w: read response body: %w", ErrDeliveryUnknown, err)
 	}
 
 	if resp.StatusCode == http.StatusTooManyRequests {
@@ -133,6 +133,12 @@ func post(ctx context.Context, client *http.Client, apiBaseURL, method string, d
 
 	return strconv.FormatInt(telegramResp.Result.MessageID, 10), nil
 }
+
+// ErrDeliveryUnknown marks a failure after the request may have reached
+// Telegram (a transport error or timeout, a cut-off response): the message
+// may have been delivered. sendMessage has no idempotency key, so a caller
+// that must not post twice should not retry these.
+var ErrDeliveryUnknown = errors.New("telegram delivery unknown")
 
 // requestError wraps a request-creation or transport error without the
 // request URL, which embeds the bot token. net/http returns these as

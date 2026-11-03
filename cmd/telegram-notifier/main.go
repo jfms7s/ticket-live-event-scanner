@@ -76,9 +76,17 @@ func main() {
 	// Start cache cleanup goroutine (removes stale entries every 30 seconds)
 	go h.CleanupCache(ctx)
 
-	// Refresh the liveness file while NATS and the consumer are reachable,
-	// so the probe fails when the notifier can no longer receive messages.
-	go health.Heartbeat(ctx, health.File(), healthInterval, health.NATSConsumerCheck(nc.Status, consumer))
+	// Refresh the liveness file while NATS and both consumers are
+	// reachable, so the probe fails when the notifier can no longer
+	// receive events or the digest.
+	eventsCheck := health.NATSConsumerCheck(nc.Status, consumer)
+	digestCheck := health.NATSConsumerCheck(nc.Status, digestConsumer)
+	go health.Heartbeat(ctx, health.File(), healthInterval, func(ctx context.Context) error {
+		if err := eventsCheck(ctx); err != nil {
+			return err
+		}
+		return digestCheck(ctx)
+	})
 
 	// Start consuming messages
 	go func() {

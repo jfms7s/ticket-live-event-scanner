@@ -42,7 +42,7 @@ func TestConsumerSpecs(t *testing.T) {
 		filterSubjects []string
 	}{
 		{"telegram", TelegramConsumer(), "EVENTS", "telegram-notifier", "events.discovered", nil},
-		{"telegram digest", TelegramDigestConsumer(), "EVENTS", "telegram-notifier-digest", "scraper.digest", nil},
+		{"telegram digest", TelegramDigestConsumer(), "DIGEST", "telegram-notifier-digest", "scraper.digest", nil},
 		{"email", EmailConsumer(), "EVENTS", "email-notifier", "events.purchased", nil},
 		{"web-ui events", WebUIEventsConsumer(), "EVENTS", "web-ui-api-events", "events.discovered", nil},
 		{"web-ui notifications", WebUINotificationsConsumer(), "NOTIFICATIONS", "web-ui-api-notifications", "",
@@ -126,10 +126,18 @@ func TestRunsBucketConfig(t *testing.T) {
 	}
 }
 
-// TestEventsStreamCarriesTheDigest: the digest subject is on EVENTS (whose
-// dedup window drops a second publish of the same week).
-func TestEventsStreamCarriesTheDigest(t *testing.T) {
-	if !slices.Contains(EventsStreamConfig().Subjects, "scraper.digest") {
-		t.Errorf("EVENTS subjects = %v, want scraper.digest", EventsStreamConfig().Subjects)
+// TestDigestStream: the digest has its own stream, so an older image's
+// EnsureStreams (which rewrites EVENTS' subject list) can't drop it, and a
+// week-long dedup window drops a second publish of the same week.
+func TestDigestStream(t *testing.T) {
+	cfg := DigestStreamConfig()
+	if !slices.Equal(cfg.Subjects, []string{"scraper.digest"}) || cfg.Name != "DIGEST" {
+		t.Errorf("DIGEST = %s %v", cfg.Name, cfg.Subjects)
+	}
+	if cfg.Duplicates < 7*24*time.Hour {
+		t.Errorf("Duplicates = %v, want at least a week", cfg.Duplicates)
+	}
+	if slices.Contains(EventsStreamConfig().Subjects, "scraper.digest") {
+		t.Error("scraper.digest is also on EVENTS")
 	}
 }

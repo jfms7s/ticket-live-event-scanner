@@ -28,7 +28,7 @@ func TestSendMessageIDOnARealStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	_ = js.DeleteStream(ctx, streams.EventsStreamName)
+	_ = js.DeleteStream(ctx, streams.DigestStreamName)
 	if err := streams.EnsureStreams(ctx, js); err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestSendMessageIDOnARealStream(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	stream, err := js.Stream(ctx, streams.EventsStreamName)
+	stream, err := js.Stream(ctx, streams.DigestStreamName)
 	if err != nil {
 		t.Fatal(err)
 	}

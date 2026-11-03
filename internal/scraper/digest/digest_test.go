@@ -123,7 +123,7 @@ func TestBuild(t *testing.T) {
 	if d.NewCount != 1 || d.NewTitles[0] != "Bought" {
 		t.Errorf("new = %d %v, want only Bought (the removed one is hidden)", d.NewCount, d.NewTitles)
 	}
-	if d.Runs != 2 || d.FailedRuns != 1 || !d.RunsKnown {
+	if d.Runs != 2 || d.FailedRuns != 1 {
 		t.Errorf("runs = %d (%d failed), want 2 (1 failed)", d.Runs, d.FailedRuns)
 	}
 	if len(d.Hubs) != 1 || d.Hubs[0].Upcoming != 3 {
@@ -146,7 +146,7 @@ func TestFormat(t *testing.T) {
 		{
 			name:    "nothing new is the heartbeat",
 			digest:  func() Digest { return base },
-			want:    []string{"week of 27 Oct – 2 Nov", "No sessions in the next 14 days", "<b>Nothing new this week</b>"},
+			want:    []string{"week of 27 Oct – 2 Nov", "No sessions in the next 14 days", "<b>Nothing new this week</b>", "No scraper run in the last 7 days"},
 			notWant: []string{"<b>Runs</b>", "<b>Hubs</b>"},
 		},
 		{
@@ -174,10 +174,11 @@ func TestFormat(t *testing.T) {
 			digest: func() Digest {
 				d := base
 				d.Hubs = []Hub{{Slug: "auchan-live-academia-maia-98164", Upcoming: 4}, {Slug: "aveiro-98167", Upcoming: 2, Failed: true}}
-				d.Runs, d.FailedRuns, d.RunsKnown = 167, 3, true
+				d.Runs, d.FailedRuns = 167, 3
 				return d
 			},
-			want: []string{"Auchan Live Academia Maia: 4 upcoming", "Aveiro: last run failed (2 upcoming before)", "<b>Runs</b>: 167 runs, 3 failed"},
+			want:    []string{"Auchan Live Academia Maia: 4 upcoming", "Aveiro: last run failed (2 upcoming before)", "<b>Runs</b>: 167 runs, 3 failed"},
+			notWant: []string{"No scraper run"},
 		},
 		{
 			name: "same-month week",
@@ -214,7 +215,7 @@ func TestFormatFitsTelegram(t *testing.T) {
 		insert(t, db, ev{id: i, title: fmt.Sprintf("%s %d", long, i), date: sunday.AddDate(0, 0, int(i%14)).Format("2006-01-02T15:04"), discovered: sunday.Add(-time.Hour)})
 	}
 	var hubs []runs.HubStatus
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 15; i++ {
 		hubs = append(hubs, runs.HubStatus{Record: runs.Record{HubSlug: strings.Repeat("very-long-hub-name-", 6) + "1"}})
 	}
 	d, err := Build(context.Background(), db, fakeLog{latest: hubs}, sunday)
@@ -279,6 +280,9 @@ func TestSendPublishesOneDigest(t *testing.T) {
 	}
 	if len(pub.msgs) != 1 {
 		t.Fatalf("published %d digests, want 1", len(pub.msgs))
+	}
+	if pub.msgs[0].GeneratedAt.IsZero() {
+		t.Error("digest has no generated_at")
 	}
 	if pub.msgs[0].Week != "2025-W45" || !strings.Contains(pub.msgs[0].Text, "Wed 12 Nov · Workshop") {
 		t.Errorf("digest = %+v", pub.msgs[0])

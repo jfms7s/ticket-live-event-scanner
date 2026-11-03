@@ -1,8 +1,8 @@
 // Package digest builds the weekly Telegram digest: the sessions of the
 // next 14 days (purchased ones marked), what is new this week, the hubs
 // watched and how the scraper's runs went. It goes to the shared channel
-// every Sunday evening, "Nothing new this week" included: that line is the
-// channel's proof the scanner is alive.
+// every Sunday evening, "Nothing new this week" included; the runs line
+// (or its "no scraper run" warning) is what shows the scanner is alive.
 package digest
 
 import (
@@ -24,6 +24,7 @@ const (
 	// maxUpcoming and maxNewTitles keep the message to one screen.
 	maxUpcoming  = 10
 	maxNewTitles = 5
+	maxHubs      = 10
 	// maxTitleLen cuts long titles so the caps above bound the length.
 	maxTitleLen = 80
 )
@@ -68,9 +69,8 @@ type Digest struct {
 	NewTitles     []string
 	Hubs          []Hub
 	// Runs and FailedRuns count the scraper runs that started in the last
-	// seven days; RunsKnown is false when the run log had none.
+	// seven days.
 	Runs, FailedRuns int
-	RunsKnown        bool
 }
 
 // RunLog is what Build reads from the run log (a *runs.Reader).
@@ -186,7 +186,6 @@ func (d *Digest) addRuns(ctx context.Context, log RunLog, now time.Time) error {
 			d.FailedRuns++
 		}
 	}
-	d.RunsKnown = d.Runs > 0
 	return nil
 }
 

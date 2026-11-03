@@ -20,9 +20,10 @@ type Publisher interface {
 }
 
 // Send builds this week's digest and publishes it once on
-// streams.DigestSubject for telegram-notifier. The message ID is
-// "digest-<ISO week>", so a second publish in the same week (a manual
-// re-run, a retried Job) is dropped by the stream's 7-day dedup window.
+// streams.DigestSubject (its own DIGEST stream) for telegram-notifier. The
+// message ID is "digest-<ISO week>", so a second publish in the same week
+// (a manual re-run, a retried Job) is dropped by the stream's 7-day dedup
+// window.
 func Send(ctx context.Context, db *sql.DB, runLog RunLog, pub Publisher, now time.Time) error {
 	d, err := Build(ctx, db, runLog, now)
 	if err != nil {
@@ -32,7 +33,7 @@ func Send(ctx context.Context, db *sql.DB, runLog RunLog, pub Publisher, now tim
 	if n := utf8.RuneCountInString(text); n > MaxMessageLen {
 		return fmt.Errorf("digest is %d characters, over Telegram's %d", n, MaxMessageLen)
 	}
-	data, err := json.Marshal(event.Digest{Week: d.Week, Text: text})
+	data, err := json.Marshal(event.Digest{Week: d.Week, Text: text, GeneratedAt: now.UTC()})
 	if err != nil {
 		return fmt.Errorf("marshal digest: %w", err)
 	}

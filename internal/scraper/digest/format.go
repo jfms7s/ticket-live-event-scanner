@@ -12,7 +12,8 @@ import (
 const MaxMessageLen = 4096
 
 // Format renders d as one Telegram HTML message. Every piece of stored
-// text is escaped; the caps in Build keep it well under MaxMessageLen.
+// text is escaped and cut to maxTitleLen, and every list is capped, which
+// keeps it well under MaxMessageLen (Send still checks).
 func Format(d Digest) string {
 	var b strings.Builder
 
@@ -54,7 +55,11 @@ func Format(d Digest) string {
 
 	if len(d.Hubs) > 0 {
 		b.WriteString("\n<b>Hubs</b>\n")
-		for _, h := range d.Hubs {
+		for i, h := range d.Hubs {
+			if i == maxHubs {
+				fmt.Fprintf(&b, "+%d more\n", len(d.Hubs)-maxHubs)
+				break
+			}
 			b.WriteString(escape(cut(HubName(h.Slug))) + ": ")
 			if h.Failed {
 				fmt.Fprintf(&b, "last run failed (%d upcoming before)\n", h.Upcoming)
@@ -64,7 +69,10 @@ func Format(d Digest) string {
 		}
 	}
 
-	if d.RunsKnown {
+	// Always shown: a quiet week and a dead scraper must not read alike.
+	if d.Runs == 0 {
+		b.WriteString("\n⚠️ <b>No scraper run in the last 7 days</b>: the scanner is not watching anything.\n")
+	} else {
 		fmt.Fprintf(&b, "\n<b>Runs</b>: %s, %d failed\n", plural(d.Runs, "run"), d.FailedRuns)
 	}
 

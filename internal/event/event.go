@@ -101,4 +101,7 @@ type Digest struct {
 	// Text is the message in Telegram HTML, escaped and under 4096
 	// characters.
 	Text string `json:"text"`
+	// GeneratedAt is when it was built; telegram-notifier drops a digest
+	// too old to be news (held while it was down).
+	GeneratedAt time.Time `json:"generated_at"`
 }
