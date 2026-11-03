@@ -29,6 +29,25 @@ type Stats struct {
 	// rejected by an earlier run less than a day ago.
 	Skipped int
 	Errors  int
+	// Hubs has one entry per configured hub page this run reached, in
+	// config order.
+	Hubs []HubStats
+}
+
+// HubStats is one hub page's outcome in a run.
+type HubStats struct {
+	Slug string
+	// ID is the hub's event ID from its slug; 0 for a slug without one.
+	ID int64
+	// SessionsSeen counts the session cards on the hub page.
+	SessionsSeen int
+	// FutureSessions counts the cards dated today or later in
+	// Europe/Lisbon. A card whose date doesn't parse is not counted.
+	FutureSessions int
+	// NewEvents counts the sessions of this hub published this run.
+	NewEvents int
+	// Err is why the hub failed this run; nil when it did not.
+	Err error
 }
 
 // publisher is the part of jetstream.JetStream the scraper uses.
@@ -57,7 +76,9 @@ type Scraper struct {
 	knownIDs map[int64]bool
 	skipped  skipStore
 	skipIDs  map[int64]bool
-	Stats    Stats
+	// now is the clock "future session" is counted against.
+	now   func() time.Time
+	Stats Stats
 }
 
 // New constructs a Scraper that publishes through js and keeps its seen
@@ -84,5 +105,6 @@ func newScraper(cfg config.Config, site string, seen seenStore, pub publisher) *
 		knownIDs: make(map[int64]bool),
 		skipped:  noSkipStore{},
 		skipIDs:  make(map[int64]bool),
+		now:      time.Now,
 	}
 }

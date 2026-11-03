@@ -6,7 +6,7 @@
 //  2. Consume notifications.sent and notifications.failed messages and update
 //     notification statuses in the database.
 //  3. Serve an HTTP API for the web-ui-frontend to query events and notifications,
-//     and to trigger retries.
+//     and to trigger retries, plus the scraper's run log (GET /api/runs).
 //
 // See the project design doc (kept outside this repo), §6.4 and §8.1, for the full spec.
 package main
@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/jfms7s/ticket-live-event-scanner/internal/natsconn"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/runs"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/shutdown"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/store"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/streams"
@@ -89,6 +90,13 @@ func main() {
 		log.Fatalf("Failed to create notifications consumer: %v", err)
 	}
 
+	// The scraper's run log, served by GET /api/runs. Created here too so
+	// the endpoint works before the scraper's first run.
+	runsKV, err := streams.EnsureRunsBucket(ctx, js)
+	if err != nil {
+		log.Fatalf("Failed to ensure the runs bucket: %v", err)
+	}
+
 	// Run the NATS consumers in the background, restarting each one if it
 	// exits, until shutdown cancels ctx.
 	var consumers sync.WaitGroup
@@ -113,6 +121,7 @@ func main() {
 
 	// Setup HTTP server
 	app := api.NewApp(db, js)
+	app.SetRuns(runs.NewReader(runsKV))
 	if cfg.CORSOrigin == "*" {
 		log.Println("WARNING: CORS_ORIGIN=* lets any website call mutating endpoints; set it to the dashboard origin")
 	}

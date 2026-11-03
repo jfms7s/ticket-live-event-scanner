@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/jfms7s/ticket-live-event-scanner/internal/natsconn"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/runs"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/scraper/config"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/scraper/discovery"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/store"
@@ -27,16 +29,15 @@ func main() {
 	}
 }
 
-func run(ctx context.Context, cfg config.Config) error {
-	// Initialize Turso connection
-	db, err := store.Connect(cfg.TursoDatabaseURL, cfg.TursoAuthToken)
-	if err != nil {
-		// Wrap error but avoid exposing auth token in error messages
-		return fmt.Errorf("connect to turso (check credentials): %w", err)
-	}
-	defer db.Close()
+// recordTimeout bounds writing the run records. It has its own context:
+// the run's may already have expired.
+const recordTimeout = 10 * time.Second
 
-	// Initialize NATS connection
+func run(ctx context.Context, cfg config.Config) (err error) {
+	start := time.Now()
+
+	// NATS first: the run log lives there, and a run that fails later
+	// (the database, discovery) is still recorded.
 	nc, err := natsconn.Connect(cfg.NatsURL, "scraper")
 	if err != nil {
 		return fmt.Errorf("connect to nats: %w", err)
@@ -47,6 +48,33 @@ func run(ctx context.Context, cfg config.Config) error {
 	if err != nil {
 		return fmt.Errorf("create jetstream context: %w", err)
 	}
+
+	// The run log (see streams.RunsBucketName). Without it the run goes
+	// on: the log and the exit code still show the outcome.
+	runsKV, rerr := streams.EnsureRunsBucket(ctx, js)
+	if rerr != nil {
+		log.Printf("WARN %v; this run will not be recorded", rerr)
+	}
+	var hubs []discovery.HubStats
+	defer func() {
+		if runsKV == nil {
+			return
+		}
+		records := discovery.RunRecords(cfg.HubPages, hubs, start, time.Now(), err, redactor(cfg))
+		wctx, cancel := context.WithTimeout(context.Background(), recordTimeout)
+		defer cancel()
+		if werr := runs.Write(wctx, runsKV, records); werr != nil {
+			log.Printf("WARN recording the run: %v", werr)
+		}
+	}()
+
+	// Initialize Turso connection
+	db, err := store.Connect(cfg.TursoDatabaseURL, cfg.TursoAuthToken)
+	if err != nil {
+		// Wrap error but avoid exposing auth token in error messages
+		return fmt.Errorf("connect to turso (check credentials): %w", err)
+	}
+	defer db.Close()
 
 	// Ensure streams exist
 	if err := streams.EnsureStreams(ctx, js); err != nil {
@@ -76,9 +104,11 @@ func run(ctx context.Context, cfg config.Config) error {
 	}
 
 	// Discover events
-	if err := scraper.Discover(ctx); err != nil {
-		log.Printf("Discovery encountered errors: %v", err)
-		return fmt.Errorf("discovery failed: %w", err)
+	derr := scraper.Discover(ctx)
+	hubs = scraper.Stats.Hubs
+	if derr != nil {
+		log.Printf("Discovery encountered errors: %v", derr)
+		return fmt.Errorf("discovery failed: %w", derr)
 	}
 
 	// Log summary
@@ -89,4 +119,17 @@ func run(ctx context.Context, cfg config.Config) error {
 		scraper.Stats.Errors)
 
 	return nil
+}
+
+// redactor returns a function that removes the database auth token from
+// error text before it goes into the run log, which the dashboard serves
+// unauthenticated. The driver's errors are not known to echo the DSN, but
+// the record must not depend on that.
+func redactor(cfg config.Config) func(string) string {
+	return func(s string) string {
+		if cfg.TursoAuthToken == "" {
+			return s
+		}
+		return strings.ReplaceAll(s, cfg.TursoAuthToken, "REDACTED")
+	}
 }

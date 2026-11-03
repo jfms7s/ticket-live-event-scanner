@@ -46,3 +46,29 @@ export interface SortState {
 export type EventStatusFilter = '' | 'active' | 'finished';
 export type NotificationStatusFilter = '' | 'pending' | 'sent' | 'failed' | 'none';
 export type BoughtFilter = '' | 'yes' | 'no';
+
+// One hub's outcome in one scraper run (GET /api/runs).
+export interface Run {
+  run_id: string;
+  hub_id: number;
+  hub_slug: string;
+  started_at: string;
+  finished_at: string;
+  sessions_seen: number;
+  future_sessions: number;
+  new_events: number;
+  // Absent when the hub did not fail.
+  error?: string;
+}
+
+// A hub of the newest run, with what its older runs say.
+export interface HubStatus extends Run {
+  last_success_at: string | null;
+  upcoming_sessions: number;
+  consecutive_empty_runs: number;
+}
+
+export interface RunsSummary {
+  latest: HubStatus[];
+  runs: Run[];
+}

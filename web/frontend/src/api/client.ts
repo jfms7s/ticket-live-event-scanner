@@ -1,4 +1,4 @@
-import type { Event, EventStatusFilter } from '../types';
+import type { Event, EventStatusFilter, RunsSummary } from '../types';
 
 export class ApiError extends Error {}
 
@@ -23,6 +23,15 @@ export async function fetchEvents(status: EventStatusFilter, signal?: AbortSigna
     throw new ApiError(`API error: ${response.status}`);
   }
   return (await response.json()) || [];
+}
+
+export async function fetchRuns(signal?: AbortSignal): Promise<RunsSummary> {
+  const response = await fetch(`${baseUrl()}/api/runs?limit=24`, { signal });
+  if (!response.ok) {
+    throw new ApiError(`API error: ${response.status}`);
+  }
+  const data = (await response.json()) as Partial<RunsSummary> | null;
+  return { latest: data?.latest ?? [], runs: data?.runs ?? [] };
 }
 
 // The API refuses POST, PATCH and DELETE without this header (a cross-site

@@ -219,3 +219,34 @@ func EnsureSkippedBucket(ctx context.Context, js jetstream.JetStream) (jetstream
 	}
 	return kv, nil
 }
+
+// RunsBucketName is the JetStream KV bucket where the scraper records the
+// outcome of each run, one entry per hub (see package runs for the key and
+// value). The scraper writes it; web-ui-api reads it for GET /api/runs and
+// /metrics, and the weekly digest reads it for its "runs" line.
+const RunsBucketName = "SCRAPER_RUNS"
+
+// runsTTL keeps a little over a week of runs: the weekly digest counts the
+// last seven days.
+const runsTTL = 8 * 24 * time.Hour
+
+// RunsBucketConfig is the runs bucket's config. Both the scraper and
+// web-ui-api apply it, so release them together after changing it.
+func RunsBucketConfig() jetstream.KeyValueConfig {
+	return jetstream.KeyValueConfig{
+		Bucket:      RunsBucketName,
+		Description: "Scraper run outcomes (key: <hub id>.<run start unix ms>, value: JSON run record)",
+		History:     1,
+		TTL:         runsTTL,
+		Storage:     jetstream.FileStorage,
+	}
+}
+
+// EnsureRunsBucket creates or updates the runs bucket and returns it.
+func EnsureRunsBucket(ctx context.Context, js jetstream.JetStream) (jetstream.KeyValue, error) {
+	kv, err := js.CreateOrUpdateKeyValue(ctx, RunsBucketConfig())
+	if err != nil {
+		return nil, fmt.Errorf("ensure %s bucket: %w", RunsBucketName, err)
+	}
+	return kv, nil
+}

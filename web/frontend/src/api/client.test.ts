@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, deleteEvent, fetchEvents } from './client';
+import { ApiError, deleteEvent, fetchEvents, fetchRuns } from './client';
 
 function stubWindow(apiBaseUrl?: string) {
   vi.stubGlobal('window', apiBaseUrl === undefined ? {} : { API_BASE_URL: apiBaseUrl });
@@ -67,5 +67,20 @@ describe('api client', () => {
       'https://x.example/api/events/42',
       expect.objectContaining({ method: 'DELETE' }),
     );
+  });
+
+  it('fetches the run log and fills missing lists', async () => {
+    stubWindow('https://x.example');
+    const fetchMock = stubFetch({ ok: true, status: 200, json: async () => ({ latest: null }) });
+
+    await expect(fetchRuns()).resolves.toEqual({ latest: [], runs: [] });
+    expect(fetchMock.mock.calls[0][0]).toBe('https://x.example/api/runs?limit=24');
+  });
+
+  it('rejects when the run log is unavailable', async () => {
+    stubWindow('https://x.example');
+    stubFetch({ ok: false, status: 503 });
+
+    await expect(fetchRuns()).rejects.toThrow(/API error: 503/);
   });
 });

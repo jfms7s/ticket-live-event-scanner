@@ -110,3 +110,17 @@ func TestSkippedBucketConfig(t *testing.T) {
 		t.Errorf("TTL = %v, want 24h: a rejected session is retried about once a day", cfg.TTL)
 	}
 }
+
+func TestRunsBucketConfig(t *testing.T) {
+	cfg := RunsBucketConfig()
+	if cfg.Bucket != "SCRAPER_RUNS" {
+		t.Errorf("Bucket = %q, want SCRAPER_RUNS", cfg.Bucket)
+	}
+	// The weekly digest counts seven days of runs.
+	if cfg.TTL < 7*24*time.Hour {
+		t.Errorf("TTL = %v, want at least a week", cfg.TTL)
+	}
+	if cfg.History != 1 || cfg.Storage != jetstream.FileStorage {
+		t.Errorf("History/Storage = %d/%v, want 1/file", cfg.History, cfg.Storage)
+	}
+}
