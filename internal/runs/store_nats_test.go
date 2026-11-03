@@ -53,8 +53,10 @@ func TestReaderOnARealBucket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sum.Latest) != 1 || sum.Latest[0].HubID != 1 || !sum.Latest[0].Empty() {
-		t.Errorf("Latest = %+v, want hub 1 (the only hub of the newest run), empty after 3 runs", sum.Latest)
+	// Hub 2 has no record of the newest run but one within the current
+	// window, so it stays listed.
+	if len(sum.Latest) != 2 || sum.Latest[0].HubID != 1 || !sum.Latest[0].Empty() || !sum.Latest[1].Failed() {
+		t.Errorf("Latest = %+v, want hub 1 empty after 3 runs and hub 2 failing", sum.Latest)
 	}
 	if len(sum.Runs) != 5 {
 		t.Errorf("Runs = %d records, want 5", len(sum.Runs))
