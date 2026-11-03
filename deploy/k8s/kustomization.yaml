@@ -9,6 +9,7 @@ resources:
   - email-notifier.yaml
   - web-ui-api.yaml
   - web-ui-frontend.yaml
+  - networkpolicy.yaml
 
 # Pinned to the newest release tag (build-push.yml pushes only `v*` tags).
 # Keep these tags in step with the production pins in helm-argo-cd

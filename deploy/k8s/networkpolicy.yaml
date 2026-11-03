@@ -1,0 +1,74 @@
+# Ingress policies for the ticket-scanner namespace. Only ingress is
+# restricted; egress is left open (the scraper fetches ticketline.pt, the
+# notifiers call Telegram and the SMTP relay, the API and scraper reach
+# Turso). They need a CNI that enforces NetworkPolicy (k3s does, through its
+# embedded kube-router controller).
+---
+# (a) Deny all ingress to every pod in the namespace unless a policy below
+# allows it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: ticket-scanner
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+---
+# (b) NATS: client port 4222 only from the four services that use the bus.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nats-from-services
+  namespace: ticket-scanner
+spec:
+  podSelector:
+    matchLabels:
+      app: nats
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchExpressions:
+        - key: app
+          operator: In
+          values:
+          - scraper
+          - telegram-notifier
+          - email-notifier
+          - web-ui-api
+    ports:
+    - protocol: TCP
+      port: 4222
+---
+# (c) web-ui-api (8080) and web-ui-frontend (3000): from any pod in this
+# namespace and from kube-system, where k3s runs the Traefik ingress
+# controller.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: web-ui-from-namespace-and-ingress
+  namespace: ticket-scanner
+spec:
+  podSelector:
+    matchExpressions:
+    - key: app
+      operator: In
+      values:
+      - web-ui-api
+      - web-ui-frontend
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector: {}
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+    ports:
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 3000
