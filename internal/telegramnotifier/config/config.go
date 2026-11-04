@@ -3,7 +3,6 @@
 package config
 
 import (
-	"log"
 	"time"
 
 	"github.com/jfms7s/ticket-live-event-scanner/internal/envconfig"
@@ -23,20 +22,20 @@ type Config struct {
 var required = []string{"TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"}
 
 // Load builds a Config from environment variables. When a required variable
-// is unset it returns those variables' names and the notifier is disabled
-// (the rest of the process runs without it). An invalid
-// TELEGRAM_MIN_SEND_INTERVAL stops the process (via log.Fatal).
-func Load() (cfg Config, missing []string) {
+// is unset it returns those variables' names, and when a value is invalid
+// (TELEGRAM_MIN_SEND_INTERVAL) it returns the error; either way the
+// notifier is disabled and the rest of the process runs without it.
+func Load() (cfg Config, missing []string, err error) {
 	if missing = envconfig.Unset(required...); len(missing) > 0 {
-		return Config{}, missing
+		return Config{}, missing, nil
 	}
 	minSendInterval, err := handler.ParseMinSendInterval(envconfig.String("TELEGRAM_MIN_SEND_INTERVAL", ""))
 	if err != nil {
-		log.Fatal(err)
+		return Config{}, nil, err
 	}
 	return Config{
-		BotToken:        envconfig.Required("TELEGRAM_BOT_TOKEN"),
-		ChatID:          envconfig.Required("TELEGRAM_CHAT_ID"),
+		BotToken:        envconfig.String("TELEGRAM_BOT_TOKEN", ""),
+		ChatID:          envconfig.String("TELEGRAM_CHAT_ID", ""),
 		MinSendInterval: minSendInterval,
-	}, nil
+	}, nil, nil
 }

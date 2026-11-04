@@ -42,3 +42,24 @@ func TestFromEnvDisablesAHalfConfiguredChannel(t *testing.T) {
 		t.Error("email enabled with only SMTP_HOST set")
 	}
 }
+
+// A typo in an optional value disables that channel; it must not stop the
+// process (and so the dashboard) the way a bad value used to stop its pod.
+func TestFromEnvDisablesAChannelWithAMalformedValue(t *testing.T) {
+	for _, k := range allVars {
+		t.Setenv(k, "")
+	}
+	t.Setenv("TELEGRAM_BOT_TOKEN", "tok")
+	t.Setenv("TELEGRAM_CHAT_ID", "-100")
+	t.Setenv("TELEGRAM_MIN_SEND_INTERVAL", "3sec")
+	t.Setenv("SMTP_HOST", "h")
+	t.Setenv("SMTP_USERNAME", "u")
+	t.Setenv("SMTP_PASSWORD", "p")
+	t.Setenv("EMAIL_FROM", "f@x")
+	t.Setenv("EMAIL_TO", "t@x")
+	t.Setenv("SMTP_PORT", "submission")
+	enabled, status := FromEnv()
+	if len(enabled) != 0 || status["telegram"] || status["email"] {
+		t.Errorf("enabled %d, status %v; want both disabled", len(enabled), status)
+	}
+}

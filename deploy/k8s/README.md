@@ -142,6 +142,17 @@ kubectl get all -n ticket-scanner
 kubectl logs -n ticket-scanner -l app=scraper
 ```
 
+## Upgrading from separate notifier pods
+
+Earlier releases ran `telegram-notifier` and `email-notifier` as their own
+Deployments. `kubectl apply -k` does not delete what the manifests no longer
+list, so remove them when moving to this layout; left running, they would share
+the same durable consumers with web-ui-api and split the deliveries:
+
+```bash
+kubectl delete deployment telegram-notifier email-notifier -n ticket-scanner --ignore-not-found
+```
+
 ## NATS Streams
 
 Each Go service calls `internal/streams.EnsureStreams()` on startup to idempotently create NATS JetStream streams and consumers. You do not need to manually configure NATS streams — they will be created automatically on first run.

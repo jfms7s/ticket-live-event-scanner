@@ -20,7 +20,7 @@ type Publisher interface {
 }
 
 // Send builds this week's digest and publishes it once on
-// streams.DigestSubject (its own DIGEST stream) for telegram-notifier. The
+// streams.DigestSubject (its own DIGEST stream) for the Telegram channel. The
 // message ID is "digest-<ISO week>", so a second publish in the same week
 // (a manual re-run, a retried Job) is dropped by the stream's 7-day dedup
 // window.

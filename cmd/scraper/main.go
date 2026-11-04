@@ -31,7 +31,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	digestMode := flag.Bool("digest", false, "send the weekly digest to telegram-notifier instead of scraping")
+	digestMode := flag.Bool("digest", false, "send the weekly digest to the Telegram channel instead of scraping")
 	flag.Parse()
 
 	cfg := config.Load()
@@ -152,7 +152,7 @@ func run(ctx context.Context, cfg config.Config) (err error) {
 }
 
 // runDigest is `scraper --digest`: build this week's digest from the
-// events table and the run log and publish it once for telegram-notifier
+// events table and the run log and publish it once for the Telegram channel
 // (see package digest). It scrapes nothing and records no run.
 func runDigest(ctx context.Context, cfg config.Config) error {
 	nc, err := natsconn.Connect(cfg.NatsURL, "scraper-digest")

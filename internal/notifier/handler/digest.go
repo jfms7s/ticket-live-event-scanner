@@ -32,7 +32,7 @@ type DigestHandler struct {
 }
 
 // maxDigestAge is how old a digest may be when it is sent: one held while
-// telegram-notifier was down is stale news by the next morning.
+// the Telegram channel was down is stale news by the next morning.
 const maxDigestAge = 12 * time.Hour
 
 // digestRetryDelays space the digest's redeliveries over about an hour, so

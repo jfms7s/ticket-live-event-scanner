@@ -20,16 +20,19 @@ const restartDelay = 5 * time.Second
 
 // Binding is one durable consumer and the function handling its messages.
 type Binding struct {
-	Name     string
-	Consumer jetstream.Consumer
-	Handle   func(context.Context, jetstream.Msg) error
+	Name string
+	// Ensure creates (or updates) the durable consumer. It runs at start and
+	// again whenever the consumer stops by itself, since a consumer object
+	// outlives neither a deleted durable nor a reconnect.
+	Ensure func(context.Context) (jetstream.Consumer, error)
+	Handle func(context.Context, jetstream.Msg) error
 }
 
 // Notifier is one delivery channel.
 type Notifier interface {
 	// Name is the channel's name in logs and metrics ("telegram", "email").
 	Name() string
-	// Bindings creates (or updates) the channel's durable consumers.
+	// Bindings returns the channel's durable consumers and their handlers.
 	Bindings(ctx context.Context, js jetstream.JetStream) ([]Binding, error)
 	// Maintain runs the channel's housekeeping until ctx is done.
 	Maintain(ctx context.Context)
@@ -37,21 +40,31 @@ type Notifier interface {
 
 // Start creates every notifier's consumers, then runs them in the
 // background until ctx is cancelled. Creating the consumers is the only
-// step that can fail; a consumer that stops later is restarted. The
+// step that can fail; a consumer that stops later is created again and
+// restarted. The
 // returned channel is closed once every consumer has drained.
 func Start(ctx context.Context, js jetstream.JetStream, notifiers []Notifier) (<-chan struct{}, error) {
 	type bound struct {
 		n Notifier
 		b Binding
 	}
-	var all []bound
+	type started struct {
+		bound
+		first jetstream.Consumer
+	}
+	var all []started
 	for _, n := range notifiers {
 		bs, err := n.Bindings(ctx, js)
 		if err != nil {
 			return nil, fmt.Errorf("%s notifier: %w", n.Name(), err)
 		}
 		for _, b := range bs {
-			all = append(all, bound{n, b})
+			// Created now so a bad stream or credentials fails the start.
+			c, err := b.Ensure(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("%s notifier: %s consumer: %w", n.Name(), b.Name, err)
+			}
+			all = append(all, started{bound{n, b}, c})
 		}
 	}
 
@@ -67,9 +80,20 @@ func Start(ctx context.Context, js jetstream.JetStream, notifiers []Notifier) (<
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			shutdown.RunWithRestart(ctx, x.n.Name()+" "+x.b.Name+" consumer", func(ctx context.Context) {
-				if err := consume.Loop(ctx, x.n.Name()+" "+x.b.Name, x.b.Consumer, x.b.Handle); err != nil {
+			label := x.n.Name() + " " + x.b.Name
+			c := x.first
+			shutdown.RunWithRestart(ctx, label+" consumer", func(ctx context.Context) {
+				if c == nil {
+					var err error
+					if c, err = x.b.Ensure(ctx); err != nil {
+						log.Printf("ERROR %s consumer: %v", label, err)
+						return
+					}
+				}
+				err := consume.Loop(ctx, label, c, x.b.Handle)
+				if err != nil {
 					log.Printf("ERROR %v", err)
+					c = nil // create it again before the next try
 				}
 			}, restartDelay)
 		}()

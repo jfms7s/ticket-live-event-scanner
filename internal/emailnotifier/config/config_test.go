@@ -19,7 +19,10 @@ func TestLoadDisablesTheNotifierWhenVariablesAreUnset(t *testing.T) {
 	setAll(t)
 	t.Setenv("SMTP_PASSWORD", "")
 	t.Setenv("EMAIL_TO", "")
-	_, missing := Load()
+	_, missing, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if want := []string{"SMTP_PASSWORD", "EMAIL_TO"}; !reflect.DeepEqual(missing, want) {
 		t.Errorf("missing = %v, want %v", missing, want)
 	}
@@ -27,9 +30,22 @@ func TestLoadDisablesTheNotifierWhenVariablesAreUnset(t *testing.T) {
 
 func TestLoadReadsACompleteConfig(t *testing.T) {
 	setAll(t)
-	cfg, missing := Load()
-	if missing != nil || cfg.SMTPHost != "smtp.example" || cfg.SMTPPort != 587 ||
+	cfg, missing, err := Load()
+	if err != nil || missing != nil || cfg.SMTPHost != "smtp.example" || cfg.SMTPPort != 587 ||
 		!reflect.DeepEqual(cfg.EmailTo, []string{"a@example", "b@example"}) {
 		t.Errorf("Load = %+v, %v", cfg, missing)
+	}
+}
+
+func TestLoadReportsMalformedValuesInsteadOfStopping(t *testing.T) {
+	setAll(t)
+	t.Setenv("SMTP_PORT", "submission")
+	if _, _, err := Load(); err == nil {
+		t.Error("Load accepted SMTP_PORT=submission")
+	}
+	setAll(t)
+	t.Setenv("EMAIL_TO", " , ")
+	if _, _, err := Load(); err == nil {
+		t.Error("Load accepted an EMAIL_TO with no address")
 	}
 }

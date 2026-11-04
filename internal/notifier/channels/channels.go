@@ -24,23 +24,42 @@ import (
 func FromEnv() (enabled []notifier.Notifier, status map[string]bool) {
 	status = map[string]bool{}
 
-	tcfg, missing := telegramconfig.Load()
-	status["telegram"] = len(missing) == 0
-	if len(missing) == 0 {
+	tcfg, missing, err := telegramconfig.Load()
+	switch {
+	case err != nil:
+		log.Printf("ERROR Telegram notifications are DISABLED: %v", err)
+	case len(missing) > 0:
+		log.Printf("WARN Telegram notifications are DISABLED: %s not set", strings.Join(missing, ", "))
+	default:
+		status["telegram"] = true
 		enabled = append(enabled, Telegram(tcfg))
 		log.Printf("Minimum interval between Telegram sends: %v", tcfg.MinSendInterval)
-	} else {
-		log.Printf("WARN Telegram notifications are DISABLED: %s not set", strings.Join(missing, ", "))
+	}
+	if _, ok := status["telegram"]; !ok {
+		status["telegram"] = false
 	}
 
-	ecfg, missing := config.Load()
-	status["email"] = len(missing) == 0
-	if len(missing) == 0 {
-		enabled = append(enabled, Email(ecfg))
-	} else {
+	ecfg, missing, err := config.Load()
+	switch {
+	case err != nil:
+		log.Printf("ERROR Calendar-invite emails are DISABLED: %v", err)
+	case len(missing) > 0:
 		log.Printf("WARN Calendar-invite emails are DISABLED: %s not set", strings.Join(missing, ", "))
+	default:
+		status["email"] = true
+		enabled = append(enabled, Email(ecfg))
+	}
+	if _, ok := status["email"]; !ok {
+		status["email"] = false
 	}
 	return enabled, status
+}
+
+// ensure returns the function that creates spec's durable consumer.
+func ensure(js jetstream.JetStream, spec streams.ConsumerSpec) func(context.Context) (jetstream.Consumer, error) {
+	return func(ctx context.Context) (jetstream.Consumer, error) {
+		return streams.EnsureConsumer(ctx, js, spec)
+	}
 }
 
 // telegram sends each new session, and the weekly digest, to the chat.
@@ -55,20 +74,12 @@ func Telegram(cfg telegramconfig.Config) notifier.Notifier { return &telegram{cf
 func (t *telegram) Name() string { return "telegram" }
 
 func (t *telegram) Bindings(ctx context.Context, js jetstream.JetStream) ([]notifier.Binding, error) {
-	events, err := streams.EnsureConsumer(ctx, js, streams.TelegramConsumer())
-	if err != nil {
-		return nil, err
-	}
-	digest, err := streams.EnsureConsumer(ctx, js, streams.TelegramDigestConsumer())
-	if err != nil {
-		return nil, err
-	}
 	t.h = handler.New(t.cfg.BotToken, t.cfg.ChatID, js)
 	t.h.SetMinSendInterval(t.cfg.MinSendInterval)
 	d := handler.NewDigest(t.cfg.BotToken, t.cfg.ChatID)
 	return []notifier.Binding{
-		{Name: "events", Consumer: events, Handle: t.h.HandleMessage},
-		{Name: "digest", Consumer: digest, Handle: d.HandleMessage},
+		{Name: "events", Ensure: ensure(js, streams.TelegramConsumer()), Handle: t.h.HandleMessage},
+		{Name: "digest", Ensure: ensure(js, streams.TelegramDigestConsumer()), Handle: d.HandleMessage},
 	}, nil
 }
 
@@ -86,10 +97,6 @@ func Email(cfg config.Config) notifier.Notifier { return &emailChannel{cfg: cfg}
 func (e *emailChannel) Name() string { return "email" }
 
 func (e *emailChannel) Bindings(ctx context.Context, js jetstream.JetStream) ([]notifier.Binding, error) {
-	consumer, err := streams.EnsureConsumer(ctx, js, streams.EmailConsumer())
-	if err != nil {
-		return nil, err
-	}
 	e.h = emailhandler.New(email.SMTPConfig{
 		Host:           e.cfg.SMTPHost,
 		Port:           e.cfg.SMTPPort,
@@ -98,7 +105,7 @@ func (e *emailChannel) Bindings(ctx context.Context, js jetstream.JetStream) ([]
 		From:           e.cfg.EmailFrom,
 		AllowPlaintext: e.cfg.SMTPAllowPlaintext,
 	}, e.cfg.EmailTo, js)
-	return []notifier.Binding{{Name: "purchases", Consumer: consumer, Handle: e.h.HandleMessage}}, nil
+	return []notifier.Binding{{Name: "purchases", Ensure: ensure(js, streams.EmailConsumer()), Handle: e.h.HandleMessage}}, nil
 }
 
 func (e *emailChannel) Maintain(ctx context.Context) { e.h.CleanupCache(ctx) }

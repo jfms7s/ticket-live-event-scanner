@@ -1,13 +1,13 @@
 // Package event defines the shared message schemas published to and
 // consumed from NATS JetStream, per the project design doc (kept outside this repo), §8.
-// All four Go services import this package so the wire format stays in sync
+// Both Go services import this package so the wire format stays in sync
 // without hand-copied struct definitions:
 //   - scraper publishes events.discovered.
-//   - telegram-notifier consumes events.discovered and publishes
+//   - the Telegram channel (web-ui-api) consumes events.discovered and publishes
 //     notifications.sent / notifications.failed.
-//   - email-notifier consumes events.purchased and publishes
+//   - the email channel (web-ui-api) consumes events.purchased and publishes
 //     notifications.email.sent / notifications.email.failed.
-//   - scraper --digest publishes scraper.digest; telegram-notifier sends it.
+//   - scraper --digest publishes scraper.digest; the Telegram channel sends it.
 //   - web-ui-api consumes events.discovered and every notifications.*
 //     subject, and publishes events.discovered (manual retrigger) and
 //     events.purchased.
@@ -40,7 +40,7 @@ type Discovered struct {
 }
 
 // NotificationSent is published to subject "notifications.sent" by
-// telegram-notifier after Telegram confirms delivery (HTTP 2xx).
+// the Telegram channel after Telegram confirms delivery (HTTP 2xx).
 type NotificationSent struct {
 	EventID           int64     `json:"event_id"`
 	TelegramMessageID string    `json:"telegram_message_id"`
@@ -53,7 +53,7 @@ type NotificationSent struct {
 }
 
 // NotificationFailed is published to subject "notifications.failed" by
-// telegram-notifier once redelivery attempts are exhausted.
+// the Telegram channel once redelivery attempts are exhausted.
 type NotificationFailed struct {
 	EventID  int64     `json:"event_id"`
 	Error    string    `json:"error"`
@@ -78,7 +78,7 @@ type Purchased struct {
 }
 
 // EmailSent is published to subject "notifications.email.sent" by
-// email-notifier after the calendar-invite email is accepted by the SMTP
+// the email channel after the calendar-invite email is accepted by the SMTP
 // server.
 type EmailSent struct {
 	EventID   int64     `json:"event_id"`
@@ -87,7 +87,7 @@ type EmailSent struct {
 }
 
 // EmailFailed is published to subject "notifications.email.failed" by
-// email-notifier once redelivery attempts are exhausted.
+// the email channel once redelivery attempts are exhausted.
 type EmailFailed struct {
 	EventID  int64     `json:"event_id"`
 	Error    string    `json:"error"`
@@ -96,7 +96,7 @@ type EmailFailed struct {
 }
 
 // Digest is published to subject "scraper.digest" by `scraper --digest`
-// once a week and sent by telegram-notifier as is.
+// once a week and sent by the Telegram channel as is.
 type Digest struct {
 	// Week is the ISO week it covers, e.g. "2026-W45"; it is also the
 	// message ID, so a second publish for the same week is dropped.
@@ -104,7 +104,7 @@ type Digest struct {
 	// Text is the message in Telegram HTML, escaped and under 4096
 	// characters.
 	Text string `json:"text"`
-	// GeneratedAt is when it was built; telegram-notifier drops a digest
+	// GeneratedAt is when it was built; the Telegram channel drops a digest
 	// too old to be news (held while it was down).
 	GeneratedAt time.Time `json:"generated_at"`
 }

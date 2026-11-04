@@ -5,6 +5,7 @@ package consume
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -22,9 +23,14 @@ const DrainTimeout = 12 * time.Second
 // message in progress has been cancelled.
 const closeGrace = 2 * time.Second
 
+// ErrStopped is returned by Loop when the consumer stopped by itself (its
+// durable was deleted, the connection closed) rather than because ctx was
+// cancelled. The caller should create the consumer again and call Loop.
+var ErrStopped = errors.New("consumer stopped")
+
 // Loop delivers consumer's messages to handle, one at a time, until ctx is
 // cancelled, then drains. name labels the log lines. It returns an error
-// only when the consumer cannot be started.
+// when the consumer cannot be started or stops by itself (ErrStopped).
 func Loop(ctx context.Context, name string, consumer jetstream.Consumer, handle func(context.Context, jetstream.Msg) error) error {
 	return loop(ctx, name, consumer, handle, DrainTimeout)
 }
@@ -55,7 +61,18 @@ func loop(ctx context.Context, name string, consumer jetstream.Consumer, handle 
 		return fmt.Errorf("consume %s messages: %w", name, err)
 	}
 
-	<-ctx.Done()
+	select {
+	case <-ctx.Done():
+	case <-consumeCtx.Closed():
+		// nats.go ends the consume on a deleted durable or a closed
+		// connection and nothing else would notice: the loop would sit
+		// here receiving nothing.
+		select {
+		case <-ctx.Done():
+		default:
+			return fmt.Errorf("%s: %w", name, ErrStopped)
+		}
+	}
 
 	// Stop pulling and wait for the callback in progress to finish and ack
 	// (Stop alone doesn't wait). Past the bound, cancel the send and let

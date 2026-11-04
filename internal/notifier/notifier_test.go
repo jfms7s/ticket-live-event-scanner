@@ -3,8 +3,10 @@ package notifier
 import (
 	"context"
 	"errors"
+	neturl "net/url"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,6 +25,7 @@ type fake struct {
 	mu       sync.Mutex
 	handled  []string
 	maintain chan struct{}
+	ensured  atomic.Int32
 }
 
 func (f *fake) Name() string { return f.name }
@@ -31,17 +34,16 @@ func (f *fake) Bindings(ctx context.Context, js jetstream.JetStream) ([]Binding,
 	if f.bindErr != nil {
 		return nil, f.bindErr
 	}
-	stream, err := js.Stream(ctx, streams.EventsStreamName)
-	if err != nil {
-		return nil, err
-	}
-	c, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
-		Durable: f.durable, AckPolicy: jetstream.AckExplicitPolicy, FilterSubject: f.subject,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return []Binding{{Name: "q", Consumer: c, Handle: func(_ context.Context, m jetstream.Msg) error {
+	return []Binding{{Name: "q", Ensure: func(ctx context.Context) (jetstream.Consumer, error) {
+		f.ensured.Add(1)
+		stream, err := js.Stream(ctx, streams.EventsStreamName)
+		if err != nil {
+			return nil, err
+		}
+		return stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
+			Durable: f.durable, AckPolicy: jetstream.AckExplicitPolicy, FilterSubject: f.subject,
+		})
+	}, Handle: func(_ context.Context, m jetstream.Msg) error {
 		f.mu.Lock()
 		f.handled = append(f.handled, string(m.Data()))
 		f.mu.Unlock()
@@ -67,6 +69,10 @@ func natsJS(t *testing.T) jetstream.JetStream {
 	url := os.Getenv("NATS_TEST_URL")
 	if url == "" {
 		t.Skip("NATS_TEST_URL not set")
+	}
+	// The helper deletes the EVENTS stream: only ever on a throwaway server.
+	if u, err := neturl.Parse(url); err != nil || (u.Hostname() != "127.0.0.1" && u.Hostname() != "localhost" && u.Hostname() != "::1") {
+		t.Fatalf("NATS_TEST_URL=%q is not a loopback address; refusing to wipe its streams", url)
 	}
 	nc, err := nats.Connect(url)
 	if err != nil {
@@ -165,4 +171,43 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("condition not met in time")
+}
+
+// A consumer that dies on its own (its durable is deleted) is created again
+// and delivers the next message; it must not sit silent.
+func TestStartRecoversAConsumerThatWasDeleted(t *testing.T) {
+	js := natsJS(t)
+	f := &fake{name: "telegram", durable: "r-test", subject: streams.EventsSubject}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done, err := Start(ctx, js, []Notifier{f})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { cancel(); <-done }()
+
+	pctx, pcancel := context.WithTimeout(ctx, 20*time.Second)
+	defer pcancel()
+	if _, err := js.Publish(pctx, streams.EventsSubject, []byte("one")); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return f.count() == 1 })
+
+	stream, err := js.Stream(pctx, streams.EventsStreamName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.DeleteConsumer(pctx, "r-test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := js.Publish(pctx, streams.EventsSubject, []byte("two")); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for f.count() < 2 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if f.count() < 2 || f.ensured.Load() < 2 {
+		t.Errorf("handled %d messages, ensured %d times; want the consumer recreated and \"two\" delivered", f.count(), f.ensured.Load())
+	}
 }
