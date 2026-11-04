@@ -36,8 +36,6 @@ spec:
           operator: In
           values:
           - scraper
-          - telegram-notifier
-          - email-notifier
           - web-ui-api
     ports:
     - protocol: TCP

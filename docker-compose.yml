@@ -45,40 +45,21 @@ services:
       TURSO_DATABASE_URL: http://libsql:8080
       TURSO_AUTH_TOKEN: local
       LISTEN_ADDR: :8080
-    ports:
-      - "127.0.0.1:8080:8080"
-
-  telegram-notifier:
-    build:
-      context: .
-      dockerfile: cmd/telegram-notifier/Dockerfile
-    depends_on:
-      nats:
-        condition: service_healthy
-    environment:
-      NATS_URL: nats://nats:4222
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?set TELEGRAM_BOT_TOKEN in .env}
-      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:?set TELEGRAM_CHAT_ID in .env}
+      # Delivery channels: one whose variables are not all set is disabled.
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       # Optional: minimum time between sends (Go duration, default 3s, 0 = off)
       # TELEGRAM_MIN_SEND_INTERVAL: 3s
-
-  email-notifier:
-    build:
-      context: .
-      dockerfile: cmd/email-notifier/Dockerfile
-    depends_on:
-      nats:
-        condition: service_healthy
-    environment:
-      NATS_URL: nats://nats:4222
-      SMTP_HOST: ${SMTP_HOST:?set SMTP_HOST in .env}
+      SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
-      SMTP_USERNAME: ${SMTP_USERNAME:?set SMTP_USERNAME in .env}
-      SMTP_PASSWORD: ${SMTP_PASSWORD:?set SMTP_PASSWORD in .env}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       # Local testing only: send in cleartext when the relay offers no STARTTLS.
       # SMTP_ALLOW_PLAINTEXT: "true"
-      EMAIL_FROM: ${EMAIL_FROM:?set EMAIL_FROM in .env}
-      EMAIL_TO: ${EMAIL_TO:?set EMAIL_TO in .env}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      EMAIL_TO: ${EMAIL_TO:-}
+    ports:
+      - "127.0.0.1:8080:8080"
 
   scraper:
     build:

@@ -29,6 +29,8 @@ type App struct {
 	runs RunsReader
 
 	static http.Handler
+	// notifiers says which delivery channels are enabled; see SetNotifierStatus.
+	notifiers map[string]bool
 }
 
 // NewApp constructs an App with the given database and JetStream publisher.
@@ -44,3 +46,8 @@ func (app *App) SetRuns(r RunsReader) { app.runs = r }
 // is how the dashboard is served from the same origin. Without one those
 // paths answer 404.
 func (app *App) SetStatic(h http.Handler) { app.static = h }
+
+// SetNotifierStatus sets which delivery channels ("telegram", "email") are
+// enabled, for /metrics. A channel with incomplete configuration is
+// disabled rather than stopping the process, so its absence must be visible.
+func (app *App) SetNotifierStatus(enabled map[string]bool) { app.notifiers = enabled }

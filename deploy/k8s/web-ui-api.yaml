@@ -68,6 +68,58 @@ spec:
               key: auth_token
         - name: LISTEN_ADDR
           value: ":8080"
+        # The delivery channels (formerly the telegram-notifier and email-notifier
+        # pods). A channel whose variables are not all set is disabled, not fatal
+        # (see ticket_scanner_notifier_enabled on /metrics); the Secrets are optional.
+        - name: TELEGRAM_BOT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: telegram-bot-token
+              key: bot_token
+              optional: true
+        - name: TELEGRAM_CHAT_ID
+          valueFrom:
+            secretKeyRef:
+              name: telegram-bot-token
+              key: chat_id
+              optional: true
+        # Optional: TELEGRAM_MIN_SEND_INTERVAL, minimum time between sends (Go duration, default 3s, 0 = off)
+        - name: SMTP_HOST
+          valueFrom:
+            secretKeyRef:
+              name: smtp-credentials
+              key: host
+              optional: true
+        - name: SMTP_PORT
+          valueFrom:
+            secretKeyRef:
+              name: smtp-credentials
+              key: port
+              optional: true
+        - name: SMTP_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: smtp-credentials
+              key: username
+              optional: true
+        - name: SMTP_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: smtp-credentials
+              key: password
+              optional: true
+        - name: EMAIL_FROM
+          valueFrom:
+            secretKeyRef:
+              name: smtp-credentials
+              key: from
+              optional: true
+        - name: EMAIL_TO
+          valueFrom:
+            secretKeyRef:
+              name: smtp-credentials
+              key: to
+              optional: true
         resources:
           requests:
             cpu: 50m

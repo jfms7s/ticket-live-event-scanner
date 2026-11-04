@@ -7,8 +7,6 @@ updates:
   - package-ecosystem: docker
     directories:
       - /cmd/scraper
-      - /cmd/telegram-notifier
-      - /cmd/email-notifier
       - /cmd/web-ui-api
     schedule:
       interval: weekly

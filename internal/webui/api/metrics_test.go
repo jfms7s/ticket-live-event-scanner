@@ -91,3 +91,24 @@ func TestMetricsWithNoRunsYet(t *testing.T) {
 		t.Errorf("body:\n%s\nwant run_log_up 1 and no run series", body)
 	}
 }
+
+func TestMetricsReportWhichNotifiersAreEnabled(t *testing.T) {
+	app := &App{}
+	app.SetNotifierStatus(map[string]bool{"telegram": true, "email": false})
+	_, body := getMetrics(t, app)
+	for _, want := range []string{
+		`ticket_scanner_notifier_enabled{channel="email"} 0` + "\n",
+		`ticket_scanner_notifier_enabled{channel="telegram"} 1` + "\n",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("metrics lack %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestMetricsOmitNotifiersWhenNoneAreReported(t *testing.T) {
+	_, body := getMetrics(t, &App{})
+	if strings.Contains(body, "notifier_enabled") {
+		t.Errorf("metrics carry notifier series without a status:\n%s", body)
+	}
+}

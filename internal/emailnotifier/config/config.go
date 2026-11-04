@@ -1,12 +1,11 @@
-// Package config loads email-notifier configuration from environment
+// Package config loads the email notifier's configuration from environment
 // variables.
 package config
 
 import "github.com/jfms7s/ticket-live-event-scanner/internal/envconfig"
 
-// Config holds the email-notifier's runtime configuration.
+// Config holds the email notifier's runtime configuration.
 type Config struct {
-	NatsURL      string
 	SMTPHost     string
 	SMTPPort     int
 	SMTPUsername string
@@ -19,12 +18,18 @@ type Config struct {
 	EmailTo            []string
 }
 
-// Load builds a Config from environment variables, applying defaults where
-// applicable and terminating the process (via log.Fatalf) if a required
-// variable is missing.
-func Load() Config {
+// required are the variables without which the notifier cannot send.
+var required = []string{"SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD", "EMAIL_FROM", "EMAIL_TO"}
+
+// Load builds a Config from environment variables. When a required variable
+// is unset it returns those variables' names and the notifier is disabled
+// (the rest of the process runs without it). A malformed SMTP_PORT or an
+// EMAIL_TO with no address stops the process (via log.Fatalf).
+func Load() (cfg Config, missing []string) {
+	if missing = envconfig.Unset(required...); len(missing) > 0 {
+		return Config{}, missing
+	}
 	return Config{
-		NatsURL:            envconfig.NatsURL(),
 		SMTPHost:           envconfig.Required("SMTP_HOST"),
 		SMTPPort:           envconfig.Int("SMTP_PORT", 587),
 		SMTPUsername:       envconfig.Required("SMTP_USERNAME"),
@@ -32,5 +37,5 @@ func Load() Config {
 		SMTPAllowPlaintext: envconfig.Bool("SMTP_ALLOW_PLAINTEXT"),
 		EmailFrom:          envconfig.Required("EMAIL_FROM"),
 		EmailTo:            envconfig.List("EMAIL_TO"),
-	}
+	}, nil
 }

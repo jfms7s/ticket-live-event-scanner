@@ -36,6 +36,17 @@ func Required(key string) string {
 	return val
 }
 
+// Unset returns the keys among keys that are unset or empty, in order.
+func Unset(keys ...string) []string {
+	var missing []string
+	for _, k := range keys {
+		if os.Getenv(k) == "" {
+			missing = append(missing, k)
+		}
+	}
+	return missing
+}
+
 // Int returns key parsed as a non-negative integer, or def when it is
 // unset or empty. A value that doesn't parse, or is negative, stops the
 // process.

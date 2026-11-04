@@ -164,3 +164,16 @@ func TestNatsURL(t *testing.T) {
 		t.Errorf("set: got %q", got)
 	}
 }
+
+func TestUnset(t *testing.T) {
+	t.Setenv("ENVCONFIG_SET", "x")
+	t.Setenv("ENVCONFIG_EMPTY", "")
+	got := Unset("ENVCONFIG_SET", "ENVCONFIG_EMPTY", "ENVCONFIG_NEVER_SET")
+	want := []string{"ENVCONFIG_EMPTY", "ENVCONFIG_NEVER_SET"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Unset = %v, want %v", got, want)
+	}
+	if got := Unset("ENVCONFIG_SET"); got != nil {
+		t.Errorf("Unset(set key) = %v, want nil", got)
+	}
+}
