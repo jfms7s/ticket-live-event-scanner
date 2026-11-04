@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log"
 	"time"
-	// The scraper image (alpine) has no zone database.
+	// The image (alpine) has no zone database.
 	_ "time/tzdata"
 
 	"github.com/jfms7s/ticket-live-event-scanner/internal/scraper/parse"

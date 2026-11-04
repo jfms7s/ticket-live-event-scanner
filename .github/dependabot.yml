@@ -6,7 +6,6 @@ updates:
       interval: weekly
   - package-ecosystem: docker
     directories:
-      - /cmd/scraper
       - /cmd/web-ui-api
     schedule:
       interval: weekly

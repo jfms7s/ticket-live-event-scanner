@@ -1,7 +1,6 @@
 # Ingress policies for the ticket-scanner namespace. Only ingress is
-# restricted; egress is left open (the scraper fetches ticketline.pt, the
-# notifiers call Telegram and the SMTP relay, the API and scraper reach
-# Turso). They need a CNI that enforces NetworkPolicy (k3s does, through its
+# restricted; egress is left open (web-ui-api fetches ticketline.pt, calls Telegram and the SMTP relay
+# and reaches Turso). They need a CNI that enforces NetworkPolicy (k3s does, through its
 # embedded kube-router controller).
 ---
 # (a) Deny all ingress to every pod in the namespace unless a policy below
@@ -35,7 +34,6 @@ spec:
         - key: app
           operator: In
           values:
-          - scraper
           - web-ui-api
     ports:
     - protocol: TCP

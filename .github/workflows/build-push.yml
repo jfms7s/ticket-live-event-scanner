@@ -22,9 +22,6 @@ jobs:
     strategy:
       matrix:
         include:
-          - image: scraper
-            context: .
-            dockerfile: cmd/scraper/Dockerfile
           - image: web-ui-api
             context: .
             dockerfile: cmd/web-ui-api/Dockerfile

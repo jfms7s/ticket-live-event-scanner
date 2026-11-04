@@ -68,6 +68,18 @@ spec:
               key: auth_token
         - name: LISTEN_ADDR
           value: ":8080"
+        # The scraper and the weekly digest run in this process (formerly the
+        # scraper CronJobs): a scrape at start-up and then every hour, the digest
+        # on Sunday 19:00 Lisbon. SCRAPER_ENABLED=false turns both off. Run one by
+        # hand: kubectl exec deploy/web-ui-api -- /app/web-ui-api --scrape-once
+        # Seeds the watches table when it is empty; after that the hubs are
+        # managed on the dashboard's Watches page.
+        - name: TICKETLINE_HUB_PAGES
+          value: "auchan-live-academia-maia-98164,auchan-live-academia-aveiro-98167"
+        - name: USER_AGENT
+          value: "ticket-live-event-scanner/0.1 (personal project; contact: jfms7s@gmail.com)"
+        - name: REQUEST_DELAY_MS
+          value: "1500"
         # The delivery channels (formerly the telegram-notifier and email-notifier
         # pods). A channel whose variables are not all set is disabled, not fatal
         # (see ticket_scanner_notifier_enabled on /metrics); the Secrets are optional.

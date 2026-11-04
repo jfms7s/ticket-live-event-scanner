@@ -7,7 +7,7 @@
 //     notifications.sent / notifications.failed.
 //   - the email channel (web-ui-api) consumes events.purchased and publishes
 //     notifications.email.sent / notifications.email.failed.
-//   - scraper --digest publishes scraper.digest; the Telegram channel sends it.
+//   - web-ui-api's weekly digest job publishes scraper.digest; the Telegram channel sends it.
 //   - web-ui-api consumes events.discovered and every notifications.*
 //     subject, and publishes events.discovered (manual retrigger) and
 //     events.purchased.
@@ -95,7 +95,7 @@ type EmailFailed struct {
 	Attempts int       `json:"attempts"`
 }
 
-// Digest is published to subject "scraper.digest" by `scraper --digest`
+// Digest is published to subject "scraper.digest" by the weekly digest job
 // once a week and sent by the Telegram channel as is.
 type Digest struct {
 	// Week is the ISO week it covers, e.g. "2026-W45"; it is also the

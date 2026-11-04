@@ -9,7 +9,10 @@
 //     the weekly digest) and the email channel (calendar invites), which
 //     used to be separate pods. A channel whose configuration is
 //     incomplete is disabled (see ticket_scanner_notifier_enabled).
-//  4. Serve an HTTP API to query events and notifications and to trigger
+//  4. Run the scraper every hour and the weekly digest on Sunday evening
+//     (package schedule), formerly two CronJobs; `--scrape-once` and
+//     `--digest-once` run one by hand and exit.
+//  5. Serve an HTTP API to query events and notifications and to trigger
 //     retries, plus the scraper's run log (GET /api/runs), and the dashboard
 //     (the embedded web/frontend build) on the same origin.
 //
@@ -18,18 +21,26 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"flag"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
+	// The image has no zone database; the digest runs on Lisbon time.
+	_ "time/tzdata"
 
 	"github.com/jfms7s/ticket-live-event-scanner/internal/natsconn"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/notifier"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/notifier/channels"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/runs"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/schedule"
+	scraperconfig "github.com/jfms7s/ticket-live-event-scanner/internal/scraper/config"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/scraper/job"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/shutdown"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/store"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/streams"
@@ -51,6 +62,10 @@ const (
 )
 
 func main() {
+	scrapeOnce := flag.Bool("scrape-once", false, "run one discovery now and exit (a manual scrape: kubectl exec ... --scrape-once)")
+	digestOnce := flag.Bool("digest-once", false, "publish this week's digest now and exit (it takes the week's slot: Sunday's scheduled digest is then not sent again)")
+	flag.Parse()
+
 	cfg := config.Load()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -84,6 +99,27 @@ func main() {
 	// Ensure streams exist
 	if err := streams.EnsureStreams(ctx, js); err != nil {
 		log.Fatalf("Failed to ensure streams: %v", err)
+	}
+
+	// A manual run: do the job on this process's connections and exit,
+	// without serving or consuming.
+	if *scrapeOnce || *digestOnce {
+		scfg, err := scraperconfig.Load()
+		if err != nil {
+			log.Fatalf("Scraper configuration: %v", err)
+		}
+		deps := job.Deps{Config: scfg, DB: db, JS: js}
+		if *scrapeOnce {
+			if err := job.Scrape(ctx, deps); err != nil {
+				log.Fatalf("Scrape failed: %v", err)
+			}
+		}
+		if *digestOnce {
+			if err := job.Digest(ctx, deps); err != nil {
+				log.Fatalf("Digest failed: %v", err)
+			}
+		}
+		return
 	}
 
 	// Create durable consumers for web-ui-api
@@ -136,10 +172,14 @@ func main() {
 		log.Fatalf("Failed to start the notifiers: %v", err)
 	}
 
+	// The scraper and the weekly digest, formerly two CronJobs.
+	runsReader := runs.NewReader(runsKV)
+	schedulersDone := startSchedulers(ctx, db, js, runsReader)
+
 	// Setup HTTP server
 	app := api.NewApp(db, js)
 	app.SetNotifierStatus(channelStatus)
-	app.SetRuns(runs.NewReader(runsKV))
+	app.SetRuns(runsReader)
 	if cfg.CORSOrigin == "*" {
 		log.Println("WARNING: CORS_ORIGIN=* lets any website call mutating endpoints; set it to the dashboard origin")
 	}
@@ -188,7 +228,7 @@ func main() {
 
 	log.Println("Shutting down: stopping the consumers...")
 	cancel()
-	if shutdown.WaitOrTimeout(allDone(consumersDone, notifiersDone), consumerStopTimeout) {
+	if shutdown.WaitOrTimeout(allDone(consumersDone, notifiersDone, schedulersDone), consumerStopTimeout) {
 		log.Println("Consumers stopped; closing NATS and the database")
 	} else {
 		log.Printf("Consumers still busy after %v; closing NATS and the database anyway", consumerStopTimeout)
@@ -205,4 +245,81 @@ func allDone(chans ...<-chan struct{}) <-chan struct{} {
 		close(done)
 	}()
 	return done
+}
+
+// startSchedulers runs discovery every hour on the hour and the digest on
+// Sunday at 19:00 Lisbon time, in the background until ctx is cancelled. The
+// returned channel is closed once both have returned. SCRAPER_ENABLED=false
+// turns both off (a deployment that still runs the CronJobs, or a dev setup
+// that only wants the dashboard); a malformed scraper setting disables them
+// with a logged error rather than stopping the dashboard.
+func startSchedulers(ctx context.Context, db *sql.DB, js jetstream.JetStream, reader *runs.Reader) <-chan struct{} {
+	done := make(chan struct{})
+	if v := strings.ToLower(os.Getenv("SCRAPER_ENABLED")); v == "false" || v == "0" {
+		log.Printf("Scraper and digest schedulers are OFF (SCRAPER_ENABLED=%s)", v)
+		close(done)
+		return done
+	}
+	scfg, err := scraperconfig.Load()
+	if err != nil {
+		log.Printf("ERROR the scraper and digest are DISABLED: %v", err)
+		close(done)
+		return done
+	}
+	deps := job.Deps{Config: scfg, DB: db, JS: js}
+	lisbon, err := time.LoadLocation("Europe/Lisbon")
+	if err != nil {
+		log.Printf("ERROR the scraper and digest are DISABLED: %v", err)
+		close(done)
+		return done
+	}
+
+	// Scrape at start-up, as a CronJob would at its next hour at the latest,
+	// unless a run finished a moment ago: a pod stuck restarting must not
+	// hit ticketline.pt on every start.
+	atStart := !ranRecently(ctx, reader, startupGap)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		schedule.Run(ctx, schedule.System{}, schedule.Job{
+			Name: "scrape", Timeout: job.ScrapeTimeout,
+			Run: func(ctx context.Context) error { return job.Scrape(ctx, deps) },
+		}, schedule.Hourly(), atStart)
+	}()
+	go func() {
+		defer wg.Done()
+		schedule.Run(ctx, schedule.System{}, schedule.Job{
+			Name: "digest", Timeout: 5 * time.Minute,
+			// Sunday's tick is the week's only chance: retry a failure a few
+			// times before giving up until next week.
+			Run: func(ctx context.Context) error {
+				return schedule.Retry(ctx, schedule.System{}, 3, 30*time.Second, func(ctx context.Context) error { return job.Digest(ctx, deps) })
+			},
+		}, schedule.WeeklyAt(lisbon, time.Sunday, 19, 0), false)
+	}()
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	return done
+}
+
+// startupGap is how recently a run must have finished for start-up to skip
+// its own scrape.
+const startupGap = 10 * time.Minute
+
+// ranRecently reports whether the run log has a run that finished within d.
+// An unreadable log counts as "no".
+func ranRecently(ctx context.Context, reader *runs.Reader, d time.Duration) bool {
+	sum, err := reader.Summary(ctx, 0)
+	if err != nil {
+		return false
+	}
+	for _, h := range sum.Latest {
+		if time.Since(h.FinishedAt) < d {
+			return true
+		}
+	}
+	return false
 }
