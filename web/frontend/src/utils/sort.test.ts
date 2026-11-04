@@ -12,6 +12,7 @@ function event(overrides: Partial<Event>): Event {
     event_date: null,
     url: 'https://example.test/show',
     image_url: null,
+    hub_slug: null,
     discovered_at: '2026-11-01T10:00:00Z',
     purchased: false,
     status: 'active',

@@ -264,7 +264,7 @@ func TestMigratedColumns(t *testing.T) {
 	}
 	want := map[string][]string{
 		"events": {"id", "slug", "title", "venue", "category", "event_date", "url", "image_url",
-			"discovered_at", "purchased", "invite_status", "invite_error", "hidden"},
+			"discovered_at", "purchased", "invite_status", "invite_error", "hidden", "hub_slug"},
 		"notifications": {"id", "event_id", "status", "telegram_message_id", "attempted_at",
 			"confirmed_at", "error", "triggered_by", "delivery_seq"},
 	}
@@ -309,5 +309,38 @@ func TestConnectAddsAuthToken(t *testing.T) {
 			t.Fatalf("Connect(%q): %v", url, err)
 		}
 		db.Close()
+	}
+}
+
+// TestMigrateAddsHubSlugColumn checks that a database from before hubs were
+// recorded gains a nullable events.hub_slug, leaving existing rows NULL.
+func TestMigrateAddsHubSlugColumn(t *testing.T) {
+	ctx := context.Background()
+	db := openSQLite(t)
+
+	if _, err := db.ExecContext(ctx, `CREATE TABLE events (
+		id INTEGER PRIMARY KEY, slug TEXT NOT NULL, title TEXT NOT NULL, url TEXT NOT NULL,
+		discovered_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		purchased BOOLEAN NOT NULL DEFAULT 0, invite_status TEXT, invite_error TEXT,
+		hidden BOOLEAN NOT NULL DEFAULT 0
+	)`); err != nil {
+		t.Fatalf("create events: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO events (id, slug, title, url) VALUES (1, 's', 't', 'u')`); err != nil {
+		t.Fatalf("insert row: %v", err)
+	}
+
+	for i := 0; i < 2; i++ {
+		if err := Migrate(ctx, db); err != nil {
+			t.Fatalf("Migrate run %d: %v", i+1, err)
+		}
+	}
+
+	var hub sql.NullString
+	if err := db.QueryRowContext(ctx, `SELECT hub_slug FROM events WHERE id = 1`).Scan(&hub); err != nil {
+		t.Fatalf("read hub_slug: %v", err)
+	}
+	if hub.Valid {
+		t.Errorf("existing row hub_slug = %q, want NULL", hub.String)
 	}
 }

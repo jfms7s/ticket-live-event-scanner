@@ -38,8 +38,8 @@ func UpsertEventAndInsertNotification(ctx context.Context, db *sql.DB, disc *eve
 
 	// Upsert event (INSERT OR REPLACE in SQLite)
 	upsertEventSQL := `
-		INSERT INTO events (id, slug, title, venue, category, event_date, url, image_url, discovered_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO events (id, slug, title, venue, category, event_date, url, image_url, discovered_at, hub_slug)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''))
 		ON CONFLICT(id) DO UPDATE SET
 			slug = excluded.slug,
 			title = excluded.title,
@@ -47,13 +47,14 @@ func UpsertEventAndInsertNotification(ctx context.Context, db *sql.DB, disc *eve
 			category = excluded.category,
 			event_date = excluded.event_date,
 			url = excluded.url,
-			image_url = excluded.image_url
+			image_url = excluded.image_url,
+			hub_slug = COALESCE(excluded.hub_slug, events.hub_slug)
 	`
 
 	now := time.Now().UTC().Format(timestampLayout)
 	_, err = tx.ExecContext(ctx, upsertEventSQL,
 		disc.EventID, disc.Slug, disc.Title, disc.Venue, disc.Category,
-		disc.EventDate, disc.URL, disc.ImageURL, now,
+		disc.EventDate, disc.URL, disc.ImageURL, now, disc.HubSlug,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert event: %w", err)

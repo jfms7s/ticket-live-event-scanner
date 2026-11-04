@@ -17,7 +17,7 @@ import (
 
 // fetchAndPublishEvent fetches an event's detail page, parses it, and
 // publishes the resulting event.Discovered message to NATS JetStream.
-func (s *Scraper) fetchAndPublishEvent(ctx context.Context, basicEvent event.Discovered) error {
+func (s *Scraper) fetchAndPublishEvent(ctx context.Context, basicEvent event.Discovered, hubSlug string) error {
 	// Construct full absolute URL for detail page
 	detailURL := fmt.Sprintf("%s/evento/%s", s.baseURL, basicEvent.Slug)
 	body, err := s.fetcher.Fetch(ctx, detailURL, s.baseURL)
@@ -58,6 +58,7 @@ func (s *Scraper) fetchAndPublishEvent(ctx context.Context, basicEvent event.Dis
 
 	// Set reason
 	detailEvent.Reason = event.ReasonDiscovered
+	detailEvent.HubSlug = hubSlug
 
 	// Validate required fields
 	if detailEvent.Title == "" {

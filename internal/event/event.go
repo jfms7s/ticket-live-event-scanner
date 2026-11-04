@@ -34,6 +34,9 @@ type Discovered struct {
 	URL       string `json:"url"`
 	ImageURL  string `json:"image_url,omitempty"`
 	Reason    string `json:"reason"`
+	// HubSlug is the tracked hub page that listed this session (empty on a
+	// manual retry of an event stored before hubs were recorded).
+	HubSlug string `json:"hub_slug,omitempty"`
 }
 
 // NotificationSent is published to subject "notifications.sent" by

@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS events (
     purchased     BOOLEAN NOT NULL DEFAULT 0,
     invite_status TEXT CHECK (invite_status IN ('pending','sent','failed')),
     invite_error  TEXT,
-    hidden        BOOLEAN NOT NULL DEFAULT 0
+    hidden        BOOLEAN NOT NULL DEFAULT 0,
+    hub_slug      TEXT
 );
 
 CREATE TABLE IF NOT EXISTS notifications (
@@ -80,6 +81,9 @@ var addedEventColumns = []string{
 	// hidden is the dashboard's Remove: the row stays as the record that
 	// the event was already notified.
 	"hidden BOOLEAN NOT NULL DEFAULT 0",
+	// hub_slug is the tracked hub page that listed the event (NULL on rows
+	// from before it was recorded).
+	"hub_slug TEXT",
 }
 
 // addedNotificationColumns are notifications columns added after the

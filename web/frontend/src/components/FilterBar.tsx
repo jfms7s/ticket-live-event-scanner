@@ -1,3 +1,4 @@
+import { UNKNOWN_HUB } from '../utils/hub';
 import type { BoughtFilter, EventStatusFilter, NotificationStatusFilter } from '../types';
 
 interface FilterBarProps {
@@ -8,6 +9,10 @@ interface FilterBarProps {
   venueFilter: string;
   onVenueChange: (value: string) => void;
   venues: string[];
+  hubFilter: string;
+  onHubChange: (value: string) => void;
+  hubs: { value: string; label: string }[];
+  hasUnknownHub: boolean;
   boughtFilter: BoughtFilter;
   onBoughtChange: (value: BoughtFilter) => void;
   onRefresh: () => void;
@@ -21,6 +26,10 @@ export function FilterBar({
   venueFilter,
   onVenueChange,
   venues,
+  hubFilter,
+  onHubChange,
+  hubs,
+  hasUnknownHub,
   boughtFilter,
   onBoughtChange,
   onRefresh,
@@ -66,6 +75,21 @@ export function FilterBar({
           ))}
         </select>
       </div>
+
+      {(hubs.length > 0 || hubFilter) && (
+        <div className="filter-group">
+          <label htmlFor="hubFilter">Hub:</label>
+          <select id="hubFilter" value={hubFilter} onChange={(e) => onHubChange(e.target.value)}>
+            <option value="">All</option>
+            {hubs.map((hub) => (
+              <option key={hub.value} value={hub.value}>
+                {hub.label}
+              </option>
+            ))}
+            {hasUnknownHub && <option value={UNKNOWN_HUB}>Unknown hub</option>}
+          </select>
+        </div>
+      )}
 
       <div className="filter-group">
         <label htmlFor="boughtFilter">Bought:</label>

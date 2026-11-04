@@ -56,6 +56,7 @@ type storedEvent struct {
 	EventID                              int64
 	Slug, Title, URL                     string
 	Venue, Category, EventDate, ImageURL string
+	HubSlug                              string
 }
 
 func storedEventFrom(e *repository.EventResponse) storedEvent {
@@ -68,6 +69,7 @@ func storedEventFrom(e *repository.EventResponse) storedEvent {
 		Category:  derefString(e.Category),
 		EventDate: derefString(e.EventDate),
 		ImageURL:  derefString(e.ImageURL),
+		HubSlug:   derefString(e.HubSlug),
 	}
 }
 
@@ -83,6 +85,7 @@ func (s storedEvent) discovered(reason string) *event.Discovered {
 		URL:       s.URL,
 		ImageURL:  s.ImageURL,
 		Reason:    reason,
+		HubSlug:   s.HubSlug,
 	}
 }
 
