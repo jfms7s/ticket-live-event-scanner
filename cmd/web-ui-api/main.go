@@ -5,8 +5,9 @@
 //     them into the Turso database (upsert events, insert pending notifications).
 //  2. Consume notifications.sent and notifications.failed messages and update
 //     notification statuses in the database.
-//  3. Serve an HTTP API for the web-ui-frontend to query events and notifications,
-//     and to trigger retries, plus the scraper's run log (GET /api/runs).
+//  3. Serve an HTTP API to query events and notifications and to trigger
+//     retries, plus the scraper's run log (GET /api/runs), and the dashboard
+//     (the embedded web/frontend build) on the same origin.
 //
 // See the project design doc (kept outside this repo), §6.4 and §8.1, for the full spec.
 package main
@@ -29,6 +30,8 @@ import (
 	"github.com/jfms7s/ticket-live-event-scanner/internal/webui/api"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/webui/config"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/webui/consumer"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/webui/static"
+	"github.com/jfms7s/ticket-live-event-scanner/web/frontend"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -125,8 +128,14 @@ func main() {
 	if cfg.CORSOrigin == "*" {
 		log.Println("WARNING: CORS_ORIGIN=* lets any website call mutating endpoints; set it to the dashboard origin")
 	}
-	// CORS outermost, so preflights are answered before the header check.
-	handler := api.CORSMiddleware(api.RequireCustomHeader(app.NewMux()), cfg.CORSOrigin)
+	app.SetStatic(static.Handler(frontend.Dist()))
+	handler := api.RequireCustomHeader(app.NewMux())
+	if cfg.CORSOrigin != "" {
+		// Only for a dev setup serving the dashboard from another origin;
+		// in production it shares this one. Outermost, so preflights are
+		// answered before the header check.
+		handler = api.CORSMiddleware(handler, cfg.CORSOrigin)
+	}
 
 	// Timeouts keep a slow or idle client from holding connections open
 	// on a small pod.

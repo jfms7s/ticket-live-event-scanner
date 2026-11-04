@@ -1,6 +1,19 @@
 # Multi-stage build for web-ui-api
 
-# Stage 1: Build
+# Stage 1: Build the dashboard. The output is architecture-independent, so
+# build natively instead of under QEMU for arm64.
+FROM --platform=$BUILDPLATFORM node:24-alpine AS frontend
+
+WORKDIR /app
+
+COPY web/frontend/package.json web/frontend/package-lock.json ./
+RUN npm ci
+
+COPY web/frontend/tsconfig*.json web/frontend/vite.config.ts web/frontend/index.html ./
+COPY web/frontend/src/ src/
+RUN npm run build
+
+# Stage 2: Build the Go binary with the dashboard embedded (web/frontend/embed.go)
 FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS builder
 
 WORKDIR /build
@@ -13,6 +26,7 @@ RUN go mod download
 
 # Copy the entire project
 COPY . .
+COPY --from=frontend /app/dist web/frontend/dist
 
 # TARGETOS/TARGETARCH are populated automatically by buildx per platform in
 # the build matrix (see .github/workflows/build-push.yml's `platforms:`) --
@@ -22,7 +36,7 @@ ARG TARGETOS
 ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-w -s" -o web-ui-api ./cmd/web-ui-api
 
-# Stage 2: Runtime
+# Stage 3: Runtime
 FROM alpine:3.24
 
 # Install ca-certificates for HTTPS

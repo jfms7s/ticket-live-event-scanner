@@ -23,5 +23,10 @@ func (app *App) NewMux() *http.ServeMux {
 	mux.HandleFunc("GET /api/runs", app.handleListRuns)
 	mux.HandleFunc("GET /metrics", app.handleMetrics)
 
+	// Dashboard: the catch-all; the patterns above are more specific and win.
+	if app.static != nil {
+		mux.Handle("GET /", app.static)
+	}
+
 	return mux
 }

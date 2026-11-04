@@ -2,19 +2,8 @@ import type { Event, EventStatusFilter, RunsSummary } from '../types';
 
 export class ApiError extends Error {}
 
-// config.js (served by server.js) sets API_BASE_URL before the app loads. If
-// it didn't load, fail with a clear message instead of fetching
-// "undefined/api/…" and showing a generic network error.
-function baseUrl(): string {
-  const url = window.API_BASE_URL;
-  if (!url) {
-    throw new ApiError('Configuration error: API_BASE_URL is not set (config.js missing?)');
-  }
-  return url.endsWith('/') ? url.slice(0, -1) : url;
-}
-
 export async function fetchEvents(status: EventStatusFilter, signal?: AbortSignal): Promise<Event[]> {
-  let url = `${baseUrl()}/api/events`;
+  let url = `/api/events`;
   if (status) {
     url += `?status=${encodeURIComponent(status)}`;
   }
@@ -26,7 +15,7 @@ export async function fetchEvents(status: EventStatusFilter, signal?: AbortSigna
 }
 
 export async function fetchRuns(signal?: AbortSignal): Promise<RunsSummary> {
-  const response = await fetch(`${baseUrl()}/api/runs?limit=24`, { signal });
+  const response = await fetch('/api/runs?limit=24', { signal });
   if (!response.ok) {
     throw new ApiError(`API error: ${response.status}`);
   }
@@ -39,7 +28,7 @@ export async function fetchRuns(signal?: AbortSignal): Promise<RunsSummary> {
 const MUTATION_HEADERS = { 'X-Requested-With': 'ticket-scanner' };
 
 export async function retriggerEvent(eventId: number): Promise<void> {
-  const response = await fetch(`${baseUrl()}/api/events/${eventId}/retrigger`, {
+  const response = await fetch(`/api/events/${eventId}/retrigger`, {
     method: 'POST',
     headers: MUTATION_HEADERS,
   });
@@ -53,7 +42,7 @@ export async function retriggerEvent(eventId: number): Promise<void> {
 }
 
 export async function setPurchased(eventId: number, purchased: boolean): Promise<void> {
-  const response = await fetch(`${baseUrl()}/api/events/${eventId}/purchased`, {
+  const response = await fetch(`/api/events/${eventId}/purchased`, {
     method: 'PATCH',
     headers: { ...MUTATION_HEADERS, 'Content-Type': 'application/json' },
     body: JSON.stringify({ purchased }),
@@ -64,7 +53,7 @@ export async function setPurchased(eventId: number, purchased: boolean): Promise
 }
 
 export async function deleteEvent(eventId: number): Promise<void> {
-  const response = await fetch(`${baseUrl()}/api/events/${eventId}`, {
+  const response = await fetch(`/api/events/${eventId}`, {
     method: 'DELETE',
     headers: MUTATION_HEADERS,
   });

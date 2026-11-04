@@ -8,7 +8,6 @@ resources:
   - telegram-notifier.yaml
   - email-notifier.yaml
   - web-ui-api.yaml
-  - web-ui-frontend.yaml
   - networkpolicy.yaml
 
 # Pinned to the newest release tag (build-push.yml pushes only `v*` tags).
@@ -26,7 +25,4 @@ images:
     newTag: v0.3.0
   - name: ticket-scanner/web-ui-api
     newName: ghcr.io/jfms7s/ticket-live-event-scanner-web-ui-api
-    newTag: v0.3.0
-  - name: ticket-scanner/web-ui-frontend
-    newName: ghcr.io/jfms7s/ticket-live-event-scanner-web-ui-frontend
     newTag: v0.3.0

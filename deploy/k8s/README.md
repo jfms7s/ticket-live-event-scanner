@@ -26,14 +26,12 @@ This directory contains Kubernetes manifests to deploy the ticket-scanner servic
   - Go JSON API on port 8080 (exposed via Service on port 80)
   - Liveness/readiness probes on `GET /healthz`
   - Consumes both NATS streams (`EVENTS`, `NOTIFICATIONS`), materializes into the libsql database
-- **web-ui-frontend.yaml**: Web UI frontend (Deployment + Service)
-  - JavaScript/frontend server on port 3000 (exposed via Service on port 80)
-  - Calls `web-ui-api` internally
+  - Also serves the dashboard (the React build is embedded in the binary) at `/`, same origin as `/api`
   - These manifests define no Ingress
 - **networkpolicy.yaml**: Ingress NetworkPolicies (egress is not restricted)
   - Default-deny ingress for every pod in the namespace
   - NATS `4222` only from `scraper`, `telegram-notifier`, `email-notifier` and `web-ui-api` pods
-  - `web-ui-api` `8080` and `web-ui-frontend` `3000` from pods in this namespace and from `kube-system` (k3s Traefik)
+  - `web-ui-api` `8080` from pods in this namespace and from `kube-system` (k3s Traefik)
   - The services accept optional NATS credentials (`NATS_TOKEN`, `NATS_USER` + `NATS_PASSWORD`, or `NATS_CREDS`); this broker runs without auth
 - **secrets.example.yaml**: Placeholder Secret templates (see "Secrets" section below)
 - **kustomization.yaml**: Kustomize index, includes all resources
@@ -46,7 +44,7 @@ The raw manifests reference local placeholder image names (e.g. `ticket-scanner/
 
 ### GitHub Container Registry (default)
 
-`.github/workflows/build-push.yml` builds and pushes all five images to GHCR (multi-arch,
+`.github/workflows/build-push.yml` builds and pushes all four images to GHCR (multi-arch,
 amd64 + arm64) when a `v*` tag is pushed, tagged with the release tag (e.g. `v0.2.1`).
 A manual run (`workflow_dispatch`) pushes the tag name when started from a tag, and only the
 commit SHA when started from a branch. Merging to `master` pushes no images, and there is no
@@ -56,7 +54,6 @@ commit SHA when started from a branch. Merging to `master` pushes no images, and
 - `ghcr.io/jfms7s/ticket-live-event-scanner-telegram-notifier`
 - `ghcr.io/jfms7s/ticket-live-event-scanner-email-notifier`
 - `ghcr.io/jfms7s/ticket-live-event-scanner-web-ui-api`
-- `ghcr.io/jfms7s/ticket-live-event-scanner-web-ui-frontend`
 
 `kustomization.yaml` pins every image to the newest release tag. To deploy another release,
 bump the tag before applying:
@@ -67,8 +64,7 @@ kustomize edit set image \
   ticket-scanner/scraper=ghcr.io/jfms7s/ticket-live-event-scanner-scraper:<vX.Y.Z> \
   ticket-scanner/telegram-notifier=ghcr.io/jfms7s/ticket-live-event-scanner-telegram-notifier:<vX.Y.Z> \
   ticket-scanner/email-notifier=ghcr.io/jfms7s/ticket-live-event-scanner-email-notifier:<vX.Y.Z> \
-  ticket-scanner/web-ui-api=ghcr.io/jfms7s/ticket-live-event-scanner-web-ui-api:<vX.Y.Z> \
-  ticket-scanner/web-ui-frontend=ghcr.io/jfms7s/ticket-live-event-scanner-web-ui-frontend:<vX.Y.Z>
+  ticket-scanner/web-ui-api=ghcr.io/jfms7s/ticket-live-event-scanner-web-ui-api:<vX.Y.Z>
 kubectl apply -k .
 ```
 
@@ -88,18 +84,16 @@ docker build -t ticket-scanner/scraper:local -f cmd/scraper/Dockerfile .
 docker build -t ticket-scanner/telegram-notifier:local -f cmd/telegram-notifier/Dockerfile .
 docker build -t ticket-scanner/email-notifier:local -f cmd/email-notifier/Dockerfile .
 docker build -t ticket-scanner/web-ui-api:local -f cmd/web-ui-api/Dockerfile .
-docker build -t ticket-scanner/web-ui-frontend:local web/frontend
 
 # Load into cluster
 kind load docker-image ticket-scanner/scraper:local
 kind load docker-image ticket-scanner/telegram-notifier:local
 kind load docker-image ticket-scanner/email-notifier:local
 kind load docker-image ticket-scanner/web-ui-api:local
-kind load docker-image ticket-scanner/web-ui-frontend:local
 
 # Apply each manifest directly, not via `-k`, so the :local tags aren't rewritten
 kubectl apply -f namespace.yaml -f nats.yaml -f scraper.yaml \
-  -f telegram-notifier.yaml -f email-notifier.yaml -f web-ui-api.yaml -f web-ui-frontend.yaml \
+  -f telegram-notifier.yaml -f email-notifier.yaml -f web-ui-api.yaml \
   -f networkpolicy.yaml
 ```
 
@@ -169,7 +163,7 @@ Each Go service calls `internal/streams.EnsureStreams()` on startup to idempoten
 
 ## Architecture Notes
 
-- **Cluster-internal only**: In these manifests the web UI services (API + frontend) are ClusterIP services with no Ingress. Access them from within the cluster (e.g., via port-forward for local testing).
+- **Cluster-internal only**: In these manifests the web UI services (the API, which also serves the dashboard) are ClusterIP services with no Ingress. Access them from within the cluster (e.g., via port-forward for local testing).
 - **Stateless scraper**: The scraper is a CronJob that runs once per hour. It queries the database to determine known event IDs and publishes only new discoveries.
 - **Single NATS replica**: NATS is deployed as a single-replica StatefulSet for simplicity. It is self-hosted in-cluster per design (not a managed service).
 - **External database**: The database is libsql (hosted Turso or a self-hosted libsql-server), not part of these manifests. Ensure the cluster can reach it.
