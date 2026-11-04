@@ -133,30 +133,77 @@ func TestResolveSeedsAnEmptyTable(t *testing.T) {
 	}
 }
 
-func TestResolveUsesTheTableAndIgnoresTheEnvOnceItHasRows(t *testing.T) {
+// A watch added on the dashboard before the scraper's first seed must not
+// drop the configured hubs.
+func TestResolveSeedsAroundAnExistingWatch(t *testing.T) {
 	db, ctx := testDB(t, true), context.Background()
-	Add(ctx, db, "a-1", "", now)
-	Add(ctx, db, "b-2", "", now)
+	Add(ctx, db, "user-hub-55", "", now)
+
+	got, err := Resolve(ctx, db, []string{"a-1", "b-2"}, now)
+	if err != nil || !reflect.DeepEqual(got, []string{"user-hub-55", "a-1", "b-2"}) {
+		t.Fatalf("Resolve = %v, %v; want the user's hub and both configured hubs", got, err)
+	}
+	if ws, _ := List(ctx, db); len(ws) != 3 {
+		t.Errorf("watches = %+v, want 3", ws)
+	}
+}
+
+func TestResolveKeepsADisabledSeededHubDisabled(t *testing.T) {
+	db, ctx := testDB(t, true), context.Background()
+	Resolve(ctx, db, []string{"a-1", "b-2"}, now)
 	off := false
 	Update(ctx, db, "b-2", &off, nil)
 
-	got, err := Resolve(ctx, db, []string{"env-9"}, now)
+	got, err := Resolve(ctx, db, []string{"a-1", "b-2"}, now)
 	if err != nil || !reflect.DeepEqual(got, []string{"a-1"}) {
-		t.Errorf("Resolve = %v, %v; want only the enabled watch, not the env hub", got, err)
-	}
-	if ws, _ := List(ctx, db); len(ws) != 2 {
-		t.Errorf("Resolve added watches: %+v", ws)
+		t.Errorf("Resolve = %v, %v; want only a-1: the env var must not re-enable b-2", got, err)
 	}
 }
 
 func TestResolveAllDisabledIsEmpty(t *testing.T) {
 	db, ctx := testDB(t, true), context.Background()
-	Add(ctx, db, "a-1", "", now)
+	Resolve(ctx, db, []string{"a-1"}, now)
 	off := false
 	Update(ctx, db, "a-1", &off, nil)
-	got, err := Resolve(ctx, db, []string{"env-9"}, now)
+	got, err := Resolve(ctx, db, []string{"a-1"}, now)
 	if err != nil || len(got) != 0 {
-		t.Errorf("Resolve = %v, %v; want none (the env hub must not come back)", got, err)
+		t.Errorf("Resolve = %v, %v; want none", got, err)
+	}
+}
+
+// A seed that cannot be written must not drop hubs: they are not known to be
+// disabled.
+func TestResolveStillScrapesTheSeedWhenItCannotBeWritten(t *testing.T) {
+	db, ctx := testDB(t, true), context.Background()
+	if _, err := db.Exec(`CREATE TRIGGER no_ins BEFORE INSERT ON watches BEGIN SELECT RAISE(ABORT, 'readonly'); END`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Resolve(ctx, db, []string{"a-1"}, now)
+	if err != nil || !reflect.DeepEqual(got, []string{"a-1"}) {
+		t.Errorf("Resolve = %v, %v; want the seed", got, err)
+	}
+}
+
+// An entry without an event id is returned (so the run fails on it, loudly,
+// as before) but not stored as a watch.
+func TestResolveDoesNotStoreAnInvalidSeedEntry(t *testing.T) {
+	db, ctx := testDB(t, true), context.Background()
+	got, err := Resolve(ctx, db, []string{"no-id", "a-1"}, now)
+	if err != nil || !reflect.DeepEqual(got, []string{"no-id", "a-1"}) {
+		t.Fatalf("Resolve = %v, %v", got, err)
+	}
+	if ws, _ := List(ctx, db); len(ws) != 1 || ws[0].Slug != "a-1" {
+		t.Errorf("watches = %+v, want only a-1", ws)
+	}
+}
+
+func TestAddRejectsTheSameHubIDUnderAnotherSlug(t *testing.T) {
+	db, ctx := testDB(t, true), context.Background()
+	Add(ctx, db, "maia-98164", "", now)
+	for _, slug := range []string{"maia-98164", "MAIA-98164", "other-name-98164"} {
+		if _, err := Add(ctx, db, slug, "", now); !errors.Is(err, ErrDuplicate) {
+			t.Errorf("Add(%q) error = %v, want ErrDuplicate", slug, err)
+		}
 	}
 }
 

@@ -14,6 +14,7 @@ export function WatchesPage() {
   const [url, setUrl] = useState('');
   const [label, setLabel] = useState('');
   const [busy, setBusy] = useState(false);
+  const [toggling, setToggling] = useState<ReadonlySet<string>>(new Set());
   const latestOnly = useRef(createLatestOnly());
 
   const refresh = useCallback(async () => {
@@ -59,12 +60,23 @@ export function WatchesPage() {
   }
 
   async function handleToggle(watch: Watch) {
+    if (toggling.has(watch.slug)) return;
+    // An in-flight refresh began before this change; its list must not
+    // overwrite it.
+    latestOnly.current.begin();
+    setToggling((prev) => new Set(prev).add(watch.slug));
     try {
       const updated = await updateWatch(watch.slug, { enabled: !watch.enabled });
       setWatches((prev) => prev?.map((w) => (w.slug === updated.slug ? updated : w)) ?? prev);
       setError(null);
     } catch (err) {
       setError((err as Error).message);
+    } finally {
+      setToggling((prev) => {
+        const next = new Set(prev);
+        next.delete(watch.slug);
+        return next;
+      });
     }
   }
 
@@ -124,6 +136,7 @@ export function WatchesPage() {
                   <input
                     type="checkbox"
                     checked={watch.enabled}
+                    disabled={toggling.has(watch.slug)}
                     aria-label={`Scrape ${watchName(watch)}`}
                     onChange={() => handleToggle(watch)}
                   />

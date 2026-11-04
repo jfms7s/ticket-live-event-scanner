@@ -119,6 +119,19 @@ func List(ctx context.Context, db *sql.DB) ([]Watch, error) {
 
 // Add inserts an enabled watch. It returns ErrDuplicate if slug exists.
 func Add(ctx context.Context, db *sql.DB, slug, label string, now time.Time) (Watch, error) {
+	existing, err := List(ctx, db)
+	if err != nil {
+		return Watch{}, err
+	}
+	// Two slugs with one ticketline id are the same hub (the run log is
+	// keyed by id), whatever their spelling.
+	id := parse.ExtractIDFromSlug(slug)
+	for _, e := range existing {
+		if strings.EqualFold(e.Slug, slug) || (id != 0 && parse.ExtractIDFromSlug(e.Slug) == id) {
+			return Watch{}, ErrDuplicate
+		}
+	}
+
 	w := Watch{Slug: slug, Label: label, Enabled: true, AddedAt: now.UTC().Format(timestampLayout)}
 	res, err := db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO watches (slug, label, enabled, added_at) VALUES (?, ?, 1, ?)`,
@@ -174,15 +187,19 @@ func Disabled(ctx context.Context, db *sql.DB) (map[string]bool, error) {
 
 func isNoTable(err error) bool { return strings.Contains(err.Error(), "no such table") }
 
-// Resolve returns the hub slugs to scrape this run.
+// Resolve returns the hub slugs to scrape this run: the enabled watches,
+// plus any hub of seed (TICKETLINE_HUB_PAGES) that is not a watch yet.
 //
-//   - With watches in the table, the enabled ones; seed (TICKETLINE_HUB_PAGES)
-//     is ignored, and a log line says so when it is set.
-//   - With an empty table, seed: it is inserted (INSERT OR IGNORE, so a
-//     concurrent run or a retry does nothing twice) so the dashboard shows
-//     the hubs already being scraped, and returned.
-//   - Without the table (web-ui-api has not migrated yet), seed, unchanged.
+// The seed is inserted as watches (INSERT OR IGNORE semantics, so a retry or
+// a concurrent run does nothing twice), so the dashboard lists the hubs
+// already being scraped. It is applied on every run, not only to an empty
+// table: a watch added on the dashboard before the first seed must not drop
+// the configured hubs. A seeded hub that was disabled stays disabled, and
+// a hub that cannot be inserted is still scraped (it is not known to be
+// disabled). Invalid seed entries (no event ID) are returned unchanged and
+// not inserted, so the run fails on them as it always has.
 //
+// Without the table (web-ui-api has not migrated yet) the result is seed.
 // A database error is returned rather than falling back to seed, which
 // could scrape hubs that were disabled. The result may be empty; the caller
 // decides that is an error.
@@ -196,26 +213,38 @@ func Resolve(ctx context.Context, db *sql.DB, seed []string, now time.Time) ([]s
 		return nil, fmt.Errorf("read watches: %w", err)
 	}
 
-	if len(ws) == 0 {
-		for _, slug := range seed {
-			if _, err := Add(ctx, db, slug, "", now); err != nil && !errors.Is(err, ErrDuplicate) {
-				log.Printf("WARN could not seed watch %s: %v", slug, err)
-			}
+	known := map[string]bool{}
+	var out []string
+	for _, w := range ws {
+		known[w.Slug] = true
+		if w.Enabled {
+			out = append(out, w.Slug)
 		}
-		if len(seed) > 0 {
-			log.Printf("Seeded the watches table from TICKETLINE_HUB_PAGES (%d hub(s))", len(seed))
-		}
-		return seed, nil
 	}
 
-	var enabled []string
-	for _, w := range ws {
-		if w.Enabled {
-			enabled = append(enabled, w.Slug)
+	var added int
+	for _, slug := range seed {
+		if known[slug] {
+			continue
+		}
+		known[slug] = true
+		out = append(out, slug)
+		if _, err := Parse(slug); err != nil {
+			continue
+		}
+		switch _, err := Add(ctx, db, slug, "", now); {
+		case err == nil:
+			added++
+		case errors.Is(err, ErrDuplicate):
+			// The same hub under another spelling is already a watch;
+			// if it was disabled, do not scrape it through the seed.
+			out = out[:len(out)-1]
+		default:
+			log.Printf("WARN could not seed watch %s: %v", slug, err)
 		}
 	}
-	if len(seed) > 0 {
-		log.Printf("TICKETLINE_HUB_PAGES is ignored: the watches table has %d watch(es), %d enabled", len(ws), len(enabled))
+	if added > 0 {
+		log.Printf("Seeded %d watch(es) from TICKETLINE_HUB_PAGES", added)
 	}
-	return enabled, nil
+	return out, nil
 }

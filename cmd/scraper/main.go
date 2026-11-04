@@ -100,13 +100,16 @@ func run(ctx context.Context, cfg config.Config) (err error) {
 
 	// The hubs to scrape: the enabled watches (TICKETLINE_HUB_PAGES only
 	// seeds an empty table). Recorded runs name these hubs too.
-	cfg.HubPages, err = watch.Resolve(ctx, db, cfg.HubPages, time.Now())
+	// cfg.HubPages stays the env list until this succeeds, so a failure
+	// here is still recorded against the configured hubs.
+	hubPages, err := watch.Resolve(ctx, db, cfg.HubPages, time.Now())
 	if err != nil {
 		return err
 	}
-	if len(cfg.HubPages) == 0 {
-		return errors.New("no enabled watch: add a hub page on the dashboard's Watches page, or set TICKETLINE_HUB_PAGES to seed one")
+	if len(hubPages) == 0 {
+		return errors.New("no enabled watch: add a hub page on the dashboard's Watches page, or enable one")
 	}
+	cfg.HubPages = hubPages
 
 	// The scraper's own record of what it has published (see
 	// streams.SeenBucketName).
