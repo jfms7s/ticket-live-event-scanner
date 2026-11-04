@@ -64,7 +64,7 @@ func TestUnknownPathsFallBackOrNotFound(t *testing.T) {
 	if rec := get(h, http.MethodGet, "/some/client/route"); rec.Code != http.StatusOK || rec.Body.String() != indexHTML {
 		t.Errorf("SPA route = %d, want index.html", rec.Code)
 	}
-	for _, p := range []string{"/assets/missing.js", "/missing.png", "/api/nope", "/api"} {
+	for _, p := range []string{"/assets/missing.js", "/missing.png", "/api/nope", "/api", "/healthz/", "/metrics/"} {
 		if rec := get(h, http.MethodGet, p); rec.Code != http.StatusNotFound {
 			t.Errorf("GET %s = %d, want 404", p, rec.Code)
 		}
@@ -136,5 +136,23 @@ func TestEmptyBuildServesNotFound(t *testing.T) {
 	h := Handler(fstest.MapFS{".gitkeep": {}})
 	if rec := get(h, http.MethodGet, "/"); rec.Code != http.StatusNotFound {
 		t.Errorf("GET / without a build = %d, want 404", rec.Code)
+	}
+}
+
+func TestVaryIsAppendedNotReplaced(t *testing.T) {
+	h := Handler(testFS())
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	rec.Header().Set("Vary", "Origin")
+	h.ServeHTTP(rec, req)
+	if got := rec.Header().Values("Vary"); len(got) != 2 {
+		t.Errorf("Vary = %v, want Origin and Accept-Encoding", got)
+	}
+}
+
+func TestDataSrcDoesNotExemptInlineScript(t *testing.T) {
+	idx := &file{data: []byte(`<script data-src="x">var a;</script>`)}
+	if csp := contentSecurityPolicy(idx); !strings.Contains(csp, "'sha256-") {
+		t.Errorf("inline script with data-src not hashed: %q", csp)
 	}
 }

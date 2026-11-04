@@ -31,7 +31,7 @@ var compressible = map[string]bool{
 }
 
 var inlineScript = regexp.MustCompile(`(?is)<script\b([^>]*)>(.*?)</script>`)
-var srcAttr = regexp.MustCompile(`(?i)\bsrc\s*=`)
+var srcAttr = regexp.MustCompile(`(?i)\ssrc\s*=`)
 
 type file struct {
 	contentType string
@@ -103,7 +103,7 @@ func Handler(fsys fs.FS) http.Handler {
 		h.Set("Content-Security-Policy", csp)
 		body := f.data
 		if f.gzip != nil {
-			h.Set("Vary", "Accept-Encoding")
+			h.Add("Vary", "Accept-Encoding")
 			if acceptsGzip(r) {
 				body = f.gzip
 				h.Set("Content-Encoding", "gzip")
@@ -116,7 +116,16 @@ func Handler(fsys fs.FS) http.Handler {
 	})
 }
 
-func isAPI(name string) bool { return name == "api" || strings.HasPrefix(name, "api/") }
+// isAPI reports paths owned by the API, which must 404 rather than fall back
+// to index.html (a probe or scrape of /healthz/ must not see the dashboard).
+func isAPI(name string) bool {
+	for _, p := range []string{"api", "healthz", "metrics"} {
+		if name == p || strings.HasPrefix(name, p+"/") {
+			return true
+		}
+	}
+	return false
+}
 
 // contentSecurityPolicy allows scripts from this origin plus the hash of
 // each inline script in index.html (the theme bootstrap), without
