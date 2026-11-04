@@ -37,10 +37,11 @@ export function App() {
   const hasUnknownHub = useMemo(() => events.some((event) => !event.hub_slug), [events]);
 
   useEffect(() => {
-    if (hubFilter && hubFilter !== UNKNOWN_HUB && !hubs.some((hub) => hub.value === hubFilter)) {
+    const stale = hubFilter === UNKNOWN_HUB ? !hasUnknownHub : !hubs.some((hub) => hub.value === hubFilter);
+    if (hubFilter && stale) {
       setHubFilter('');
     }
-  }, [hubs, hubFilter]);
+  }, [hubs, hasUnknownHub, hubFilter]);
 
   useEffect(() => {
     if (venueFilter && !venues.includes(venueFilter)) {

@@ -9,15 +9,26 @@ export function hubLabel(slug: string): string {
   return slug.replace(/-\d+$/, '') || slug;
 }
 
-// The distinct hubs present in events, sorted by label. Events without a hub
+// The distinct hubs present in events, sorted by label (the full slug when
+// two hubs share a short label). Events without a hub
 // are not listed here; see matchesHub for how they filter.
 export function hubOptions(events: Event[]): { value: string; label: string }[] {
   const slugs = new Set<string>();
   for (const event of events) {
     if (event.hub_slug) slugs.add(event.hub_slug);
   }
+  const labelCounts = new Map<string, number>();
+  for (const slug of slugs) {
+    const label = hubLabel(slug);
+    labelCounts.set(label, (labelCounts.get(label) ?? 0) + 1);
+  }
+  // Two hubs whose slugs differ only by id would read the same: show the
+  // full slug for those.
   return Array.from(slugs)
-    .map((value) => ({ value, label: hubLabel(value) }))
+    .map((value) => {
+      const label = hubLabel(value);
+      return { value, label: (labelCounts.get(label) ?? 0) > 1 ? value : label };
+    })
     .sort((a, b) => a.label.localeCompare(b.label) || a.value.localeCompare(b.value));
 }
 

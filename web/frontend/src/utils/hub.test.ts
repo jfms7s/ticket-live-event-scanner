@@ -25,6 +25,16 @@ describe('hubOptions', () => {
   });
 });
 
+describe('hubOptions label collisions', () => {
+  it('shows the full slug when two hubs share a short label', () => {
+    expect(hubOptions([ev('foo-100'), ev('foo-200'), ev('bar-1')])).toEqual([
+      { value: 'bar-1', label: 'bar' },
+      { value: 'foo-100', label: 'foo-100' },
+      { value: 'foo-200', label: 'foo-200' },
+    ]);
+  });
+});
+
 describe('matchesHub', () => {
   it('keeps everything when no hub is selected', () => {
     expect(matchesHub(ev('a-1'), '')).toBe(true);
