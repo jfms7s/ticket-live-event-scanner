@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -236,9 +237,13 @@ func Resolve(ctx context.Context, db *sql.DB, seed []string, now time.Time) ([]s
 		case err == nil:
 			added++
 		case errors.Is(err, ErrDuplicate):
-			// The same hub under another spelling is already a watch;
-			// if it was disabled, do not scrape it through the seed.
+			// The same hub is already a watch (another spelling, or a
+			// concurrent run seeded it just now): scrape it only if that
+			// watch is enabled.
 			out = out[:len(out)-1]
+			if w, ok := enabledSameHub(ctx, db, slug); ok && !slices.Contains(out, w) {
+				out = append(out, w)
+			}
 		default:
 			log.Printf("WARN could not seed watch %s: %v", slug, err)
 		}
@@ -247,4 +252,20 @@ func Resolve(ctx context.Context, db *sql.DB, seed []string, now time.Time) ([]s
 		log.Printf("Seeded %d watch(es) from TICKETLINE_HUB_PAGES", added)
 	}
 	return out, nil
+}
+
+// enabledSameHub returns the slug of an enabled watch for the same hub as
+// slug (same ticketline id), if there is one.
+func enabledSameHub(ctx context.Context, db *sql.DB, slug string) (string, bool) {
+	ws, err := List(ctx, db)
+	if err != nil {
+		return "", false
+	}
+	id := parse.ExtractIDFromSlug(slug)
+	for _, w := range ws {
+		if w.Enabled && (strings.EqualFold(w.Slug, slug) || (id != 0 && parse.ExtractIDFromSlug(w.Slug) == id)) {
+			return w.Slug, true
+		}
+	}
+	return "", false
 }

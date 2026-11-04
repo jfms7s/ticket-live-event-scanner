@@ -3,6 +3,7 @@ package schedule
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -213,28 +214,46 @@ func TestALongRunSkipsTheTicksItSpanned(t *testing.T) {
 	eventually(t, func() bool { return r.count() == 3 })
 }
 
-// A timer that fires slightly before the tick must not run the job twice.
-func TestAnEarlyTimerDoesNotFireATickTwice(t *testing.T) {
+// A timer that fires slightly before the tick must not run the job early or
+// twice: the loop looks at the clock again and waits out the rest.
+func TestAnEarlyTimerDoesNotRunEarlyOrTwice(t *testing.T) {
 	clock := &fakeClock{now: utc(2026, 11, 4, 10, 20)}
 	r := &runs{}
 	stop := start(t, clock, Job{Name: "scrape", Run: func(context.Context) error { r.add(clock.Now()); return nil }}, Hourly(), false)
 	defer stop()
 	eventually(t, func() bool { return clock.waiting() == 1 })
-	// Fire the timer while the clock still reads 10:59:59.9.
 	early := utc(2026, 11, 4, 10, 59).Add(59*time.Second + 900*time.Millisecond)
-	clock.mu.Lock()
-	clock.now = early
-	w := clock.waiters[0]
-	clock.waiters = nil
-	clock.mu.Unlock()
-	w.ch <- early
-	eventually(t, func() bool { return r.count() == 1 && clock.waiting() == 1 })
-	clock.mu.Lock()
-	next := clock.waiters[0].at
-	clock.mu.Unlock()
-	if want := utc(2026, 11, 4, 12, 0); !next.Equal(want) {
-		t.Errorf("next wait ends at %v, want %v (not the same 11:00 tick again)", next, want)
+	clock.advance(early)
+	eventually(t, func() bool { return clock.waiting() == 1 })
+	if r.count() != 0 {
+		t.Fatalf("ran %d times before the tick", r.count())
 	}
+	clock.advance(utc(2026, 11, 4, 11, 0))
+	eventually(t, func() bool { return r.count() == 1 && clock.waiting() == 1 })
+	clock.advance(utc(2026, 11, 4, 11, 0).Add(time.Millisecond))
+	time.Sleep(20 * time.Millisecond)
+	if r.count() != 1 {
+		t.Errorf("the 11:00 tick ran %d times", r.count())
+	}
+}
+
+// A clock stepped back during the wait (NTP) must not leave the job
+// sleeping for the stale interval: it still runs when the clock reads 11:00.
+func TestAClockStepBackwardsDoesNotDelayTheTick(t *testing.T) {
+	clock := &fakeClock{now: utc(2026, 11, 4, 10, 2)}
+	r := &runs{}
+	stop := start(t, clock, Job{Name: "scrape", Run: func(context.Context) error { r.add(clock.Now()); return nil }}, Hourly(), false)
+	defer stop()
+	eventually(t, func() bool { return clock.waiting() == 1 })
+	clock.advance(utc(2026, 11, 4, 10, 3)) // a normal minute passes
+	eventually(t, func() bool { return clock.waiting() == 1 })
+	clock.advance(utc(2026, 11, 4, 7, 3)) // stepped back three hours
+	eventually(t, func() bool { return clock.waiting() == 1 })
+	if r.count() != 0 {
+		t.Fatalf("ran %d times at 07:03", r.count())
+	}
+	clock.advance(utc(2026, 11, 4, 11, 0))
+	eventually(t, func() bool { return r.count() == 1 })
 }
 
 func TestAFailingOrPanickingRunDoesNotStopTheLoop(t *testing.T) {
@@ -293,4 +312,43 @@ func TestStopsWhileWaitingAndWhileRunning(t *testing.T) {
 	stop2 := start(t, clock, job, Hourly(), true)
 	<-started
 	stop2() // returns: the run saw the cancel and Run did not start another
+}
+
+func TestRetryStopsAtTheFirstSuccess(t *testing.T) {
+	clock := &fakeClock{now: utc(2026, 11, 8, 19, 0)}
+	calls := 0
+	done := make(chan error, 1)
+	go func() {
+		done <- Retry(context.Background(), clock, 3, 30*time.Second, func(context.Context) error {
+			calls++
+			if calls < 2 {
+				return errors.New("boom")
+			}
+			return nil
+		})
+	}()
+	eventually(t, func() bool { return clock.waiting() == 1 })
+	clock.advance(utc(2026, 11, 8, 19, 1))
+	if err := <-done; err != nil || calls != 2 {
+		t.Errorf("err %v after %d calls, want success on the second", err, calls)
+	}
+}
+
+func TestRetryGivesUpWithTheLastError(t *testing.T) {
+	clock := &fakeClock{now: utc(2026, 11, 8, 19, 0)}
+	calls := 0
+	done := make(chan error, 1)
+	go func() {
+		done <- Retry(context.Background(), clock, 3, 30*time.Second, func(context.Context) error {
+			calls++
+			return fmt.Errorf("fail %d", calls)
+		})
+	}()
+	for i := 1; i <= 2; i++ {
+		eventually(t, func() bool { return clock.waiting() == 1 })
+		clock.advance(utc(2026, 11, 8, 19, i))
+	}
+	if err := <-done; err == nil || err.Error() != "fail 3" || calls != 3 {
+		t.Errorf("err %v after %d calls, want fail 3 after 3", err, calls)
+	}
 }

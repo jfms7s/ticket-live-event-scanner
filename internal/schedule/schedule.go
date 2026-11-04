@@ -76,12 +76,32 @@ func Run(ctx context.Context, clock Clock, job Job, next Next, runAtStart bool) 
 		}
 		last = next(from)
 		log.Printf("%s: next run at %s", job.Name, last.Format(time.RFC3339))
-		select {
-		case <-ctx.Done():
+		if !waitUntil(ctx, clock, last) {
 			return
-		case <-clock.After(last.Sub(clock.Now())):
 		}
 		runOnce(ctx, clock, job)
+	}
+}
+
+// maxWait caps one sleep, so the wall clock is looked at again at least
+// this often: a clock stepped back (NTP) would otherwise leave a sleep
+// computed against the old time running hours long, and one stepped forward
+// would fire late.
+const maxWait = time.Minute
+
+// waitUntil sleeps until the clock reads at or after t. It returns false if
+// ctx is cancelled first.
+func waitUntil(ctx context.Context, clock Clock, t time.Time) bool {
+	for {
+		d := t.Sub(clock.Now())
+		if d <= 0 {
+			return ctx.Err() == nil
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-clock.After(min(d, maxWait)):
+		}
 	}
 }
 
@@ -110,4 +130,26 @@ func protect(ctx context.Context, run func(context.Context) error) (err error) {
 		}
 	}()
 	return run(ctx)
+}
+
+// Retry calls fn up to attempts times, waiting pause between tries, and
+// returns the last error if none succeeds. It stops early if ctx is
+// cancelled.
+func Retry(ctx context.Context, clock Clock, attempts int, pause time.Duration, fn func(context.Context) error) error {
+	var err error
+	for i := 0; i < attempts; i++ {
+		if err = fn(ctx); err == nil {
+			return nil
+		}
+		if i == attempts-1 {
+			break
+		}
+		log.Printf("attempt %d/%d failed: %v; retrying in %v", i+1, attempts, err, pause)
+		select {
+		case <-ctx.Done():
+			return err
+		case <-clock.After(pause):
+		}
+	}
+	return err
 }

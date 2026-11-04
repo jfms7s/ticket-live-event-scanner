@@ -63,7 +63,7 @@ const (
 
 func main() {
 	scrapeOnce := flag.Bool("scrape-once", false, "run one discovery now and exit (a manual scrape: kubectl exec ... --scrape-once)")
-	digestOnce := flag.Bool("digest-once", false, "publish this week's digest now and exit")
+	digestOnce := flag.Bool("digest-once", false, "publish this week's digest now and exit (it takes the week's slot: Sunday's scheduled digest is then not sent again)")
 	flag.Parse()
 
 	cfg := config.Load()
@@ -290,8 +290,12 @@ func startSchedulers(ctx context.Context, db *sql.DB, js jetstream.JetStream, re
 	go func() {
 		defer wg.Done()
 		schedule.Run(ctx, schedule.System{}, schedule.Job{
-			Name: "digest", Timeout: time.Minute,
-			Run: func(ctx context.Context) error { return job.Digest(ctx, deps) },
+			Name: "digest", Timeout: 5 * time.Minute,
+			// Sunday's tick is the week's only chance: retry a failure a few
+			// times before giving up until next week.
+			Run: func(ctx context.Context) error {
+				return schedule.Retry(ctx, schedule.System{}, 3, 30*time.Second, func(ctx context.Context) error { return job.Digest(ctx, deps) })
+			},
 		}, schedule.WeeklyAt(lisbon, time.Sunday, 19, 0), false)
 	}()
 	go func() {

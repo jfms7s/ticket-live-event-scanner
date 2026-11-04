@@ -165,3 +165,5 @@ Earlier releases ran the scraper as a CronJob (and the digest as a second one). 
 kubectl delete cronjob scraper -n ticket-scanner --ignore-not-found
 kubectl delete serviceaccount,role,rolebinding scraper -n ticket-scanner --ignore-not-found
 ```
+
+The Helm chart (`ticket-live-event-scanner-helm` >= 0.13.0) also had a weekly digest CronJob (`<release>-ticket-scanner-digest`); Argo CD prunes it with the chart upgrade, but if you removed the chart by hand, delete it too. Until it is gone it would publish the digest with the old image (the week's single slot goes to whichever publishes first).

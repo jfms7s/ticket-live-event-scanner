@@ -18,7 +18,7 @@ const (
 	PurchasedSubject = "events.purchased"
 
 	// DigestStreamName / DigestSubject carry the weekly digest from
-	// `scraper --digest` to telegram-notifier (one message a week, already
+	// web-ui-api's weekly digest job to telegram-notifier (one message a week, already
 	// formatted). A stream of its own: EnsureStreams replaces a stream's
 	// whole subject list, so on EVENTS any older image starting up would
 	// drop the subject; older images never touch DIGEST.

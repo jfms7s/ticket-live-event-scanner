@@ -52,7 +52,7 @@ func Scrape(ctx context.Context, d Deps) (err error) {
 	}
 	var hubs []discovery.HubStats
 	defer func() {
-		if runsKV == nil {
+		if runsKV == nil || !shouldRecord(err) {
 			return
 		}
 		records := discovery.RunRecords(cfg.HubPages, hubs, start, time.Now(), err, redactor(cfg))
@@ -109,6 +109,15 @@ func Scrape(ctx context.Context, d Deps) (err error) {
 		scraper.Stats.Skipped,
 		scraper.Stats.Errors)
 	return nil
+}
+
+// shouldRecord says whether a run that ended with err goes into the run log.
+// A run cut short because the process is shutting down (a deploy, an
+// eviction) is not a failure of the hubs: recording it would turn the header
+// red and, within the start-up gap, make the next pod skip its scrape. A
+// timeout (DeadlineExceeded) is a real failure and is recorded.
+func shouldRecord(err error) bool {
+	return !errors.Is(err, context.Canceled)
 }
 
 // Digest builds this week's digest from the events table and the run log

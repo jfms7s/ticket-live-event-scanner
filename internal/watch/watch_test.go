@@ -225,3 +225,17 @@ func TestResolveFailsOnADatabaseError(t *testing.T) {
 		t.Errorf("Resolve on a closed database = %v, nil; want an error, not the env hubs", got)
 	}
 }
+
+// A seed hub that a concurrent run (or another spelling) already made an
+// enabled watch is scraped once, not dropped.
+func TestResolveKeepsAnEnabledWatchForTheSameHub(t *testing.T) {
+	db, ctx := testDB(t, true), context.Background()
+	Add(ctx, db, "MAIA-98164", "", now)
+	got, err := Resolve(ctx, db, []string{"maia-98164"}, now)
+	if err != nil || !reflect.DeepEqual(got, []string{"MAIA-98164"}) {
+		t.Errorf("Resolve = %v, %v; want the enabled watch once", got, err)
+	}
+	if h, ok := enabledSameHub(ctx, db, "other-98164"); !ok || h != "MAIA-98164" {
+		t.Errorf("enabledSameHub = %q, %v", h, ok)
+	}
+}
