@@ -1,7 +1,8 @@
 /bin/
 *.test
 node_modules/
-dist/
+web/frontend/dist/*
+!web/frontend/dist/.gitkeep
 *.tsbuildinfo
 .env
 .quality/

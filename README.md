@@ -1,6 +1,6 @@
 # ticket-live-event-scanner
 
-Watches ticketline.pt for new events and posts each one to a Telegram chat, tracks whether the notification was delivered, and serves a small web dashboard with a manual retry. It is a set of Go services (`cmd/scraper`, `cmd/telegram-notifier`, `cmd/email-notifier`, `cmd/web-ui-api`) talking over NATS JetStream and storing state in SQLite/Turso, plus a React frontend in `web/frontend`. Images are built and pushed to GHCR when a `v*` tag is pushed (or the workflow is run by hand), and only after the checks below pass.
+Watches ticketline.pt for new events and posts each one to a Telegram chat, tracks whether the notification was delivered, and serves a small web dashboard with a manual retry. It is a set of Go services (`cmd/scraper`, `cmd/telegram-notifier`, `cmd/email-notifier`, `cmd/web-ui-api`) talking over NATS JetStream and storing state in SQLite/Turso, plus a React frontend in `web/frontend`, built into the `web-ui-api` binary (`go:embed`) and served by it at `/`, same origin as `/api`. Images are built and pushed to GHCR when a `v*` tag is pushed (or the workflow is run by hand), and only after the checks below pass.
 
 ## Local checks
 
@@ -14,7 +14,7 @@ go vet ./...
 go test -count=1 -race ./...
 ```
 
-Frontend (Node 24, the same major as `web/frontend/Dockerfile`; Vite 8 needs Node >= 20.19):
+Frontend (Node 24, the same major as `cmd/web-ui-api/Dockerfile`; Vite 8 needs Node >= 20.19):
 
 ```bash
 cd web/frontend

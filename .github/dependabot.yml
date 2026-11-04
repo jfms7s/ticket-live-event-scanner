@@ -10,7 +10,6 @@ updates:
       - /cmd/telegram-notifier
       - /cmd/email-notifier
       - /cmd/web-ui-api
-      - /web/frontend
     schedule:
       interval: weekly
   - package-ecosystem: docker-compose

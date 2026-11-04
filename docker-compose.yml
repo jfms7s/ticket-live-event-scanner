@@ -45,22 +45,8 @@ services:
       TURSO_DATABASE_URL: http://libsql:8080
       TURSO_AUTH_TOKEN: local
       LISTEN_ADDR: :8080
-      # The dashboard (port 3000) calls the API cross-origin; never "*" (unauthenticated mutating endpoints).
-      CORS_ORIGIN: http://localhost:3000
     ports:
       - "127.0.0.1:8080:8080"
-
-  web-ui-frontend:
-    build:
-      context: web/frontend
-      dockerfile: Dockerfile
-    depends_on:
-      - web-ui-api
-    environment:
-      API_BASE_URL: http://localhost:8080
-      PORT: "3000"
-    ports:
-      - "127.0.0.1:3000:3000"
 
   telegram-notifier:
     build:

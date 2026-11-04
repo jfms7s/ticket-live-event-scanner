@@ -34,9 +34,6 @@ jobs:
           - image: web-ui-api
             context: .
             dockerfile: cmd/web-ui-api/Dockerfile
-          - image: web-ui-frontend
-            context: web/frontend
-            dockerfile: web/frontend/Dockerfile
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -48,11 +45,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # The Go images compile natively ($BUILDPLATFORM builder) but their
+      # The images compile natively ($BUILDPLATFORM builder) but their
       # alpine runtime stages RUN apk/adduser for arm64, which needs
-      # emulation. The frontend's runtime stage only COPYs, so it doesn't.
+      # emulation.
       - name: Set up QEMU
-        if: matrix.image != 'web-ui-frontend'
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
 
       - name: Set up Docker Buildx
