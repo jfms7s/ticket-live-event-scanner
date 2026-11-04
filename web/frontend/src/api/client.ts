@@ -1,4 +1,4 @@
-import type { Event, EventStatusFilter, RunsSummary } from '../types';
+import type { Event, EventStatusFilter, RunsSummary, Watch } from '../types';
 
 export class ApiError extends Error {}
 
@@ -60,4 +60,47 @@ export async function deleteEvent(eventId: number): Promise<void> {
   if (!response.ok && response.status !== 404) {
     throw new ApiError(`API error: ${response.status}`);
   }
+}
+
+// The API's error text ({"error": "..."}) when it has one.
+async function errorMessage(response: Response): Promise<string> {
+  try {
+    const body = (await response.json()) as { error?: string };
+    if (body.error) return body.error;
+  } catch {
+    // Not JSON: fall through to the status.
+  }
+  return `API error: ${response.status}`;
+}
+
+export async function fetchWatches(signal?: AbortSignal): Promise<Watch[]> {
+  const response = await fetch('/api/watches', { signal });
+  if (!response.ok) {
+    throw new ApiError(`API error: ${response.status}`);
+  }
+  return (await response.json()) || [];
+}
+
+export async function addWatch(url: string, label: string): Promise<Watch> {
+  const response = await fetch('/api/watches', {
+    method: 'POST',
+    headers: { ...MUTATION_HEADERS, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, label }),
+  });
+  if (!response.ok) {
+    throw new ApiError(await errorMessage(response));
+  }
+  return response.json();
+}
+
+export async function updateWatch(slug: string, patch: { enabled?: boolean; label?: string }): Promise<Watch> {
+  const response = await fetch(`/api/watches/${encodeURIComponent(slug)}`, {
+    method: 'PATCH',
+    headers: { ...MUTATION_HEADERS, 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!response.ok) {
+    throw new ApiError(await errorMessage(response));
+  }
+  return response.json();
 }

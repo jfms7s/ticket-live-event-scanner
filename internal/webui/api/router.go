@@ -23,6 +23,11 @@ func (app *App) NewMux() *http.ServeMux {
 	mux.HandleFunc("GET /api/runs", app.handleListRuns)
 	mux.HandleFunc("GET /metrics", app.handleMetrics)
 
+	// Watch list: the hub pages the scraper tracks
+	mux.HandleFunc("GET /api/watches", app.handleListWatches)
+	mux.HandleFunc("POST /api/watches", app.handleAddWatch)
+	mux.HandleFunc("PATCH /api/watches/{slug}", app.handleUpdateWatch)
+
 	// Dashboard: the catch-all; the patterns above are more specific and win.
 	if app.static != nil {
 		mux.Handle("GET /", app.static)

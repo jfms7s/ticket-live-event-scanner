@@ -4,13 +4,28 @@ import { TABLE_COLUMN_COUNT } from './components/columns';
 import { EventsTable } from './components/EventsTable';
 import { FilterBar } from './components/FilterBar';
 import { Header } from './components/Header';
+import { WatchesPage } from './components/WatchesPage';
 import { useEvents } from './hooks/useEvents';
 import type { BoughtFilter, EventStatusFilter, NotificationStatusFilter, SortKey, SortState } from './types';
 import { UNKNOWN_HUB, hubOptions, matchesHub } from './utils/hub';
 import { getLatestNotificationStatus } from './utils/notifications';
 import { getSortValue } from './utils/sort';
 
+type View = 'events' | 'watches';
+
+function viewFromHash(): View {
+  return window.location.hash === '#watches' ? 'watches' : 'events';
+}
+
 export function App() {
+  const [view, setView] = useState<View>(viewFromHash);
+
+  useEffect(() => {
+    const onHashChange = () => setView(viewFromHash());
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+
   const [eventStatusFilter, setEventStatusFilter] = useState<EventStatusFilter>('');
   const [notificationStatusFilter, setNotificationStatusFilter] = useState<NotificationStatusFilter>('');
   const [venueFilter, setVenueFilter] = useState('');
@@ -106,6 +121,20 @@ export function App() {
     <div className="container">
       <Header />
 
+      <nav className="view-tabs" aria-label="Views">
+        <a href="#events" aria-current={view === 'events' ? 'page' : undefined}>
+          Events
+        </a>
+        <a href="#watches" aria-current={view === 'watches' ? 'page' : undefined}>
+          Watches
+        </a>
+      </nav>
+
+      {view === 'watches' ? (
+        <WatchesPage />
+      ) : (
+        <>
+
       <ErrorBanner
         message={bannerMessage}
         onDismiss={() => {
@@ -160,6 +189,8 @@ export function App() {
       <footer>
         <p>Auto-refreshing every 30 seconds</p>
       </footer>
+        </>
+      )}
     </div>
   );
 }

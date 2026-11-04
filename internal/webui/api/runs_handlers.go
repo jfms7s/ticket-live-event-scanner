@@ -37,5 +37,5 @@ func (app *App) handleListRuns(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "run log unavailable")
 		return
 	}
-	writeJSON(w, http.StatusOK, sum)
+	writeJSON(w, http.StatusOK, app.withoutDisabledHubs(r.Context(), sum))
 }

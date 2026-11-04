@@ -45,6 +45,16 @@ CREATE TABLE IF NOT EXISTS notifications (
     delivery_seq        INTEGER
 );
 
+-- The hub pages the scraper tracks (package watch). web-ui-api manages the
+-- rows; the scraper reads them and seeds the table once from
+-- TICKETLINE_HUB_PAGES.
+CREATE TABLE IF NOT EXISTS watches (
+    slug     TEXT PRIMARY KEY,
+    label    TEXT NOT NULL DEFAULT '',
+    enabled  BOOLEAN NOT NULL DEFAULT 1,
+    added_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_notifications_event_id ON notifications(event_id);
 CREATE INDEX IF NOT EXISTS idx_events_discovered_at ON events(discovered_at);
 `

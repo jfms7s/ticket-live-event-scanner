@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -18,6 +19,7 @@ import (
 	"github.com/jfms7s/ticket-live-event-scanner/internal/scraper/discovery"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/store"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/streams"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/watch"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -95,6 +97,19 @@ func run(ctx context.Context, cfg config.Config) (err error) {
 	if err := streams.EnsureStreams(ctx, js); err != nil {
 		return fmt.Errorf("ensure streams: %w", err)
 	}
+
+	// The hubs to scrape: the enabled watches (TICKETLINE_HUB_PAGES only
+	// seeds an empty table). Recorded runs name these hubs too.
+	// cfg.HubPages stays the env list until this succeeds, so a failure
+	// here is still recorded against the configured hubs.
+	hubPages, err := watch.Resolve(ctx, db, cfg.HubPages, time.Now())
+	if err != nil {
+		return err
+	}
+	if len(hubPages) == 0 {
+		return errors.New("no enabled watch: add a hub page on the dashboard's Watches page, or enable one")
+	}
+	cfg.HubPages = hubPages
 
 	// The scraper's own record of what it has published (see
 	// streams.SeenBucketName).
