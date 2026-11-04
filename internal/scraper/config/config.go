@@ -2,9 +2,6 @@
 package config
 
 import (
-	"errors"
-	"log"
-
 	"github.com/jfms7s/ticket-live-event-scanner/internal/envconfig"
 )
 
@@ -15,13 +12,14 @@ type Config struct {
 	TursoAuthToken   string
 	UserAgent        string
 	RequestDelayMS   int
-	HubPages         []string
+	// HubPages is TICKETLINE_HUB_PAGES, which only seeds the watches table
+	// (see package watch); the run scrapes watch.Resolve's result.
+	HubPages []string
 }
 
-// defaultHubPages are the venue/series hub pages tracked when
-// TICKETLINE_HUB_PAGES is not set (the project design doc (kept outside this repo), §6.1).
-// It is empty on purpose: there is no sensible default, and an empty list
-// is a startup error (see requireHubPages).
+// defaultHubPages are the hub pages seeded when TICKETLINE_HUB_PAGES is not
+// set. It is empty on purpose: there is no sensible default. A run with no
+// enabled watch fails (see cmd/scraper).
 var defaultHubPages = []string{}
 
 // Load builds a Config from environment variables, applying defaults where
@@ -36,17 +34,5 @@ func Load() Config {
 		RequestDelayMS:   envconfig.Int("REQUEST_DELAY_MS", 1500),
 		HubPages:         hubPagesFromEnv("TICKETLINE_HUB_PAGES", defaultHubPages),
 	}
-	if err := requireHubPages(cfg.HubPages); err != nil {
-		log.Fatal(err)
-	}
 	return cfg
-}
-
-// requireHubPages rejects an empty hub page list: a run with nothing to
-// scrape would succeed while discovering nothing.
-func requireHubPages(pages []string) error {
-	if len(pages) == 0 {
-		return errors.New("TICKETLINE_HUB_PAGES is empty or has no usable entry: set it to a comma-separated list of ticketline.pt hub page URLs or slugs")
-	}
-	return nil
 }

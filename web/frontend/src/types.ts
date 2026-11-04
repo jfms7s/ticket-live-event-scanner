@@ -74,3 +74,12 @@ export interface RunsSummary {
   latest: HubStatus[];
   runs: Run[];
 }
+
+// A tracked ticketline.pt hub page (GET /api/watches).
+export interface Watch {
+  slug: string;
+  label: string;
+  enabled: boolean;
+  added_at: string;
+  hub_id: number;
+}

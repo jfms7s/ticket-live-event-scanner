@@ -58,6 +58,8 @@ spec:
               seccompProfile:
                 type: RuntimeDefault
             env:
+            # Seeds the watches table when it is empty; after that the hubs are
+            # managed on the dashboard's Watches page.
             - name: TICKETLINE_HUB_PAGES
               value: "auchan-live-academia-maia-98164,auchan-live-academia-aveiro-98167"
             # Optional NATS credentials (the broker here runs without auth). Set at most

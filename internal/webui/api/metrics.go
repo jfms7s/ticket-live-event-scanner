@@ -31,6 +31,8 @@ func (app *App) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	sum = app.withoutDisabledHubs(r.Context(), sum)
+
 	var b bytes.Buffer
 	writeRunMetrics(&b, up, sum.Latest)
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")

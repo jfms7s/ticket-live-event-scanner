@@ -90,6 +90,8 @@ services:
       libsql:
         condition: service_started
     environment:
+      # Seeds the watches table when it is empty; after that the hubs are
+      # managed on the dashboard's Watches page.
       TICKETLINE_HUB_PAGES: >-
         https://www.ticketline.pt/evento/auchan-live-academia-maia-98164,
         https://www.ticketline.pt/evento/auchan-live-academia-aveiro-98167
