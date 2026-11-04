@@ -164,3 +164,39 @@ func TestNatsURL(t *testing.T) {
 		t.Errorf("set: got %q", got)
 	}
 }
+
+func TestUnset(t *testing.T) {
+	t.Setenv("ENVCONFIG_SET", "x")
+	t.Setenv("ENVCONFIG_EMPTY", "")
+	got := Unset("ENVCONFIG_SET", "ENVCONFIG_EMPTY", "ENVCONFIG_NEVER_SET")
+	want := []string{"ENVCONFIG_EMPTY", "ENVCONFIG_NEVER_SET"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Unset = %v, want %v", got, want)
+	}
+	if got := Unset("ENVCONFIG_SET"); got != nil {
+		t.Errorf("Unset(set key) = %v, want nil", got)
+	}
+}
+
+func TestIntErrAndListErrReturnTheProblem(t *testing.T) {
+	t.Setenv("ENVCONFIG_N", "x")
+	if _, err := IntErr("ENVCONFIG_N", 1); err == nil {
+		t.Error("IntErr accepted a non-integer")
+	}
+	t.Setenv("ENVCONFIG_N", "-1")
+	if _, err := IntErr("ENVCONFIG_N", 1); err == nil {
+		t.Error("IntErr accepted a negative number")
+	}
+	t.Setenv("ENVCONFIG_N", "")
+	if n, err := IntErr("ENVCONFIG_N", 7); err != nil || n != 7 {
+		t.Errorf("IntErr(unset) = %d, %v; want the default", n, err)
+	}
+	t.Setenv("ENVCONFIG_L", " , ")
+	if _, err := ListErr("ENVCONFIG_L"); err == nil {
+		t.Error("ListErr accepted a list with no value")
+	}
+	t.Setenv("ENVCONFIG_L", "a, b")
+	if got, err := ListErr("ENVCONFIG_L"); err != nil || !reflect.DeepEqual(got, []string{"a", "b"}) {
+		t.Errorf("ListErr = %v, %v", got, err)
+	}
+}

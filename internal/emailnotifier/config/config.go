@@ -1,12 +1,11 @@
-// Package config loads email-notifier configuration from environment
+// Package config loads the email notifier's configuration from environment
 // variables.
 package config
 
 import "github.com/jfms7s/ticket-live-event-scanner/internal/envconfig"
 
-// Config holds the email-notifier's runtime configuration.
+// Config holds the email notifier's runtime configuration.
 type Config struct {
-	NatsURL      string
 	SMTPHost     string
 	SMTPPort     int
 	SMTPUsername string
@@ -19,18 +18,33 @@ type Config struct {
 	EmailTo            []string
 }
 
-// Load builds a Config from environment variables, applying defaults where
-// applicable and terminating the process (via log.Fatalf) if a required
-// variable is missing.
-func Load() Config {
-	return Config{
-		NatsURL:            envconfig.NatsURL(),
-		SMTPHost:           envconfig.Required("SMTP_HOST"),
-		SMTPPort:           envconfig.Int("SMTP_PORT", 587),
-		SMTPUsername:       envconfig.Required("SMTP_USERNAME"),
-		SMTPPassword:       envconfig.Required("SMTP_PASSWORD"),
-		SMTPAllowPlaintext: envconfig.Bool("SMTP_ALLOW_PLAINTEXT"),
-		EmailFrom:          envconfig.Required("EMAIL_FROM"),
-		EmailTo:            envconfig.List("EMAIL_TO"),
+// required are the variables without which the notifier cannot send.
+var required = []string{"SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD", "EMAIL_FROM", "EMAIL_TO"}
+
+// Load builds a Config from environment variables. When a required variable
+// is unset it returns those variables' names, and when a value is malformed
+// (SMTP_PORT not a number, EMAIL_TO with no address) it returns the error;
+// either way the notifier is disabled and the rest of the process runs
+// without it.
+func Load() (cfg Config, missing []string, err error) {
+	if missing = envconfig.Unset(required...); len(missing) > 0 {
+		return Config{}, missing, nil
 	}
+	port, err := envconfig.IntErr("SMTP_PORT", 587)
+	if err != nil {
+		return Config{}, nil, err
+	}
+	to, err := envconfig.ListErr("EMAIL_TO")
+	if err != nil {
+		return Config{}, nil, err
+	}
+	return Config{
+		SMTPHost:           envconfig.String("SMTP_HOST", ""),
+		SMTPPort:           port,
+		SMTPUsername:       envconfig.String("SMTP_USERNAME", ""),
+		SMTPPassword:       envconfig.String("SMTP_PASSWORD", ""),
+		SMTPAllowPlaintext: envconfig.Bool("SMTP_ALLOW_PLAINTEXT"),
+		EmailFrom:          envconfig.String("EMAIL_FROM", ""),
+		EmailTo:            to,
+	}, nil, nil
 }

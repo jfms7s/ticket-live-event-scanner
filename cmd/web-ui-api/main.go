@@ -5,7 +5,11 @@
 //     them into the Turso database (upsert events, insert pending notifications).
 //  2. Consume notifications.sent and notifications.failed messages and update
 //     notification statuses in the database.
-//  3. Serve an HTTP API to query events and notifications and to trigger
+//  3. Deliver the notifications: the Telegram channel (each new session,
+//     the weekly digest) and the email channel (calendar invites), which
+//     used to be separate pods. A channel whose configuration is
+//     incomplete is disabled (see ticket_scanner_notifier_enabled).
+//  4. Serve an HTTP API to query events and notifications and to trigger
 //     retries, plus the scraper's run log (GET /api/runs), and the dashboard
 //     (the embedded web/frontend build) on the same origin.
 //
@@ -23,6 +27,8 @@ import (
 	"time"
 
 	"github.com/jfms7s/ticket-live-event-scanner/internal/natsconn"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/notifier"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/notifier/channels"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/runs"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/shutdown"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/store"
@@ -122,8 +128,17 @@ func main() {
 		close(consumersDone)
 	}()
 
+	// The delivery channels (Telegram, email) that used to be separate
+	// pods. One whose configuration is incomplete is disabled, not fatal.
+	channelList, channelStatus := channels.FromEnv()
+	notifiersDone, err := notifier.Start(ctx, js, channelList)
+	if err != nil {
+		log.Fatalf("Failed to start the notifiers: %v", err)
+	}
+
 	// Setup HTTP server
 	app := api.NewApp(db, js)
+	app.SetNotifierStatus(channelStatus)
 	app.SetRuns(runs.NewReader(runsKV))
 	if cfg.CORSOrigin == "*" {
 		log.Println("WARNING: CORS_ORIGIN=* lets any website call mutating endpoints; set it to the dashboard origin")
@@ -173,9 +188,21 @@ func main() {
 
 	log.Println("Shutting down: stopping the consumers...")
 	cancel()
-	if shutdown.WaitOrTimeout(consumersDone, consumerStopTimeout) {
+	if shutdown.WaitOrTimeout(allDone(consumersDone, notifiersDone), consumerStopTimeout) {
 		log.Println("Consumers stopped; closing NATS and the database")
 	} else {
 		log.Printf("Consumers still busy after %v; closing NATS and the database anyway", consumerStopTimeout)
 	}
+}
+
+// allDone returns a channel that is closed once every channel in chans is.
+func allDone(chans ...<-chan struct{}) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		for _, c := range chans {
+			<-c
+		}
+		close(done)
+	}()
+	return done
 }

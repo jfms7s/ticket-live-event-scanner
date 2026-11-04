@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -34,10 +35,28 @@ func (app *App) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	sum = app.withoutDisabledHubs(r.Context(), sum)
 
 	var b bytes.Buffer
+	writeNotifierMetrics(&b, app.notifiers)
 	writeRunMetrics(&b, up, sum.Latest)
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	if _, err := w.Write(b.Bytes()); err != nil {
 		log.Printf("Error writing /metrics: %v", err)
+	}
+}
+
+// writeNotifierMetrics renders which delivery channels are enabled, so a
+// Secret that is missing a key is alerted on rather than silent.
+func writeNotifierMetrics(b *bytes.Buffer, enabled map[string]bool) {
+	if len(enabled) == 0 {
+		return
+	}
+	names := make([]string, 0, len(enabled))
+	for name := range enabled {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	gauge(b, "ticket_scanner_notifier_enabled", "1 when the delivery channel is configured and running, 0 when its configuration is incomplete.")
+	for _, name := range names {
+		fmt.Fprintf(b, "ticket_scanner_notifier_enabled{channel=\"%s\"} %d\n", escapeLabel(name), boolInt(enabled[name]))
 	}
 }
 

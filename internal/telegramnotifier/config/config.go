@@ -1,18 +1,16 @@
-// Package config loads telegram-notifier configuration from environment
-// variables.
+// Package config loads the Telegram notifier's configuration from
+// environment variables.
 package config
 
 import (
-	"log"
 	"time"
 
 	"github.com/jfms7s/ticket-live-event-scanner/internal/envconfig"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/notifier/handler"
 )
 
-// Config holds telegram-notifier's runtime configuration.
+// Config holds the Telegram notifier's runtime configuration.
 type Config struct {
-	NatsURL  string
 	BotToken string
 	ChatID   string
 	// MinSendInterval is TELEGRAM_MIN_SEND_INTERVAL (Go duration, default
@@ -20,17 +18,24 @@ type Config struct {
 	MinSendInterval time.Duration
 }
 
-// Load builds a Config from environment variables, terminating the process
-// (via log.Fatal) if a required variable is missing or invalid.
-func Load() Config {
+// required are the variables without which the notifier cannot send.
+var required = []string{"TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"}
+
+// Load builds a Config from environment variables. When a required variable
+// is unset it returns those variables' names, and when a value is invalid
+// (TELEGRAM_MIN_SEND_INTERVAL) it returns the error; either way the
+// notifier is disabled and the rest of the process runs without it.
+func Load() (cfg Config, missing []string, err error) {
+	if missing = envconfig.Unset(required...); len(missing) > 0 {
+		return Config{}, missing, nil
+	}
 	minSendInterval, err := handler.ParseMinSendInterval(envconfig.String("TELEGRAM_MIN_SEND_INTERVAL", ""))
 	if err != nil {
-		log.Fatal(err)
+		return Config{}, nil, err
 	}
 	return Config{
-		NatsURL:         envconfig.NatsURL(),
-		BotToken:        envconfig.Required("TELEGRAM_BOT_TOKEN"),
-		ChatID:          envconfig.Required("TELEGRAM_CHAT_ID"),
+		BotToken:        envconfig.String("TELEGRAM_BOT_TOKEN", ""),
+		ChatID:          envconfig.String("TELEGRAM_CHAT_ID", ""),
 		MinSendInterval: minSendInterval,
-	}
+	}, nil, nil
 }

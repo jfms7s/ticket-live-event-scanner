@@ -1,4 +1,4 @@
-# Build context for the four Go images (web-ui-api also builds web/frontend) (context: repo root). Keep secrets,
+# Build context for the Go images (web-ui-api also builds web/frontend) (context: repo root). Keep secrets,
 # VCS data and everything the Go builds don't read out of it.
 .env
 .env.*

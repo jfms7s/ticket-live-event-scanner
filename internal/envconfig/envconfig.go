@@ -6,6 +6,7 @@
 package envconfig
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"strconv"
@@ -36,21 +37,40 @@ func Required(key string) string {
 	return val
 }
 
+// Unset returns the keys among keys that are unset or empty, in order.
+func Unset(keys ...string) []string {
+	var missing []string
+	for _, k := range keys {
+		if os.Getenv(k) == "" {
+			missing = append(missing, k)
+		}
+	}
+	return missing
+}
+
+// IntErr is Int that returns the problem instead of stopping the process.
+func IntErr(key string, def int) (int, error) {
+	val := os.Getenv(key)
+	if val == "" {
+		return def, nil
+	}
+	i, err := strconv.Atoi(strings.TrimSpace(val))
+	if err != nil {
+		return def, fmt.Errorf("environment variable %s=%q is not an integer", key, val)
+	}
+	if i < 0 {
+		return def, fmt.Errorf("environment variable %s=%q must not be negative", key, val)
+	}
+	return i, nil
+}
+
 // Int returns key parsed as a non-negative integer, or def when it is
 // unset or empty. A value that doesn't parse, or is negative, stops the
 // process.
 func Int(key string, def int) int {
-	val := os.Getenv(key)
-	if val == "" {
-		return def
-	}
-	i, err := strconv.Atoi(strings.TrimSpace(val))
+	i, err := IntErr(key, def)
 	if err != nil {
-		fatalf("environment variable %s=%q is not an integer", key, val)
-		return def
-	}
-	if i < 0 {
-		fatalf("environment variable %s=%q must not be negative", key, val)
+		fatalf("%v", err)
 		return def
 	}
 	return i
@@ -66,11 +86,14 @@ func Bool(key string) bool {
 	return false
 }
 
-// List splits a required, comma-separated variable into trimmed, non-empty
-// values (e.g. EMAIL_TO=a@x.com,b@x.com). It stops the process when key is
-// unset or holds no value.
-func List(key string) []string {
-	raw := Required(key)
+// ListErr splits a comma-separated variable into trimmed, non-empty values
+// (e.g. EMAIL_TO=a@x.com,b@x.com). It returns an error when key is unset or
+// holds no value.
+func ListErr(key string) ([]string, error) {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return nil, fmt.Errorf("required environment variable not set: %s", key)
+	}
 	parts := strings.Split(raw, ",")
 	result := make([]string, 0, len(parts))
 	for _, p := range parts {
@@ -79,7 +102,18 @@ func List(key string) []string {
 		}
 	}
 	if len(result) == 0 {
-		fatalf("environment variable %s must contain at least one value", key)
+		return nil, fmt.Errorf("environment variable %s must contain at least one value", key)
+	}
+	return result, nil
+}
+
+// List is ListErr for a required variable: it stops the process when key
+// is unset or holds no value.
+func List(key string) []string {
+	result, err := ListErr(key)
+	if err != nil {
+		fatalf("%v", err)
+		return nil
 	}
 	return result
 }

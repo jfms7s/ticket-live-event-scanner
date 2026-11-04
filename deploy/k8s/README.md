@@ -16,21 +16,16 @@ This directory contains Kubernetes manifests to deploy the ticket-scanner servic
 - **scraper.yaml**: Ticket discovery scraper (CronJob)
   - Scheduled hourly (`0 * * * *`)
   - Pulls event data from ticketline.pt, publishes to NATS `events.discovered`
-- **telegram-notifier.yaml**: Telegram notification service (Deployment)
-  - 1 replica consuming `events.discovered` from NATS
-  - Sends Telegram messages, publishes `notifications.sent/failed` results
-- **email-notifier.yaml**: Calendar-invite email service (Deployment)
-  - 1 replica consuming `events.purchased` from NATS
-  - Sends an email with an `.ics` invite over SMTP, publishes `notifications.email.sent/failed` results
 - **web-ui-api.yaml**: Web API backend (Deployment + Service)
   - Go JSON API on port 8080 (exposed via Service on port 80)
   - Liveness/readiness probes on `GET /healthz`
   - Consumes both NATS streams (`EVENTS`, `NOTIFICATIONS`), materializes into the libsql database
+  - Also delivers the notifications: Telegram (each new session, the weekly digest) and email calendar invites, from the `telegram-bot-token` and `smtp-credentials` Secrets. A channel whose Secret is missing is disabled, not fatal, and shows as 0 in `ticket_scanner_notifier_enabled` on `/metrics`
   - Also serves the dashboard (the React build is embedded in the binary) at `/`, same origin as `/api`
   - These manifests define no Ingress
 - **networkpolicy.yaml**: Ingress NetworkPolicies (egress is not restricted)
   - Default-deny ingress for every pod in the namespace
-  - NATS `4222` only from `scraper`, `telegram-notifier`, `email-notifier` and `web-ui-api` pods
+  - NATS `4222` only from `scraper` and `web-ui-api` pods
   - `web-ui-api` `8080` from pods in this namespace and from `kube-system` (k3s Traefik)
   - The services accept optional NATS credentials (`NATS_TOKEN`, `NATS_USER` + `NATS_PASSWORD`, or `NATS_CREDS`); this broker runs without auth
 - **secrets.example.yaml**: Placeholder Secret templates (see "Secrets" section below)
@@ -51,8 +46,6 @@ commit SHA when started from a branch. Merging to `master` pushes no images, and
 `latest` tag:
 
 - `ghcr.io/jfms7s/ticket-live-event-scanner-scraper`
-- `ghcr.io/jfms7s/ticket-live-event-scanner-telegram-notifier`
-- `ghcr.io/jfms7s/ticket-live-event-scanner-email-notifier`
 - `ghcr.io/jfms7s/ticket-live-event-scanner-web-ui-api`
 
 `kustomization.yaml` pins every image to the newest release tag. To deploy another release,
@@ -62,8 +55,6 @@ bump the tag before applying:
 cd deploy/k8s
 kustomize edit set image \
   ticket-scanner/scraper=ghcr.io/jfms7s/ticket-live-event-scanner-scraper:<vX.Y.Z> \
-  ticket-scanner/telegram-notifier=ghcr.io/jfms7s/ticket-live-event-scanner-telegram-notifier:<vX.Y.Z> \
-  ticket-scanner/email-notifier=ghcr.io/jfms7s/ticket-live-event-scanner-email-notifier:<vX.Y.Z> \
   ticket-scanner/web-ui-api=ghcr.io/jfms7s/ticket-live-event-scanner-web-ui-api:<vX.Y.Z>
 kubectl apply -k .
 ```
@@ -81,19 +72,15 @@ image rewrite) with locally built images:
 ```bash
 # Build images
 docker build -t ticket-scanner/scraper:local -f cmd/scraper/Dockerfile .
-docker build -t ticket-scanner/telegram-notifier:local -f cmd/telegram-notifier/Dockerfile .
-docker build -t ticket-scanner/email-notifier:local -f cmd/email-notifier/Dockerfile .
 docker build -t ticket-scanner/web-ui-api:local -f cmd/web-ui-api/Dockerfile .
 
 # Load into cluster
 kind load docker-image ticket-scanner/scraper:local
-kind load docker-image ticket-scanner/telegram-notifier:local
-kind load docker-image ticket-scanner/email-notifier:local
 kind load docker-image ticket-scanner/web-ui-api:local
 
 # Apply each manifest directly, not via `-k`, so the :local tags aren't rewritten
 kubectl apply -f namespace.yaml -f nats.yaml -f scraper.yaml \
-  -f telegram-notifier.yaml -f email-notifier.yaml -f web-ui-api.yaml \
+  -f web-ui-api.yaml \
   -f networkpolicy.yaml
 ```
 
@@ -125,7 +112,7 @@ kubectl create secret generic telegram-bot-token \
 Get your bot token from [@BotFather](https://t.me/botfather), and your chat ID from your Telegram chat/channel.
 
 ### smtp-credentials
-SMTP relay and addresses used by email-notifier for calendar invites. Create with:
+SMTP relay and addresses used by web-ui-api's email channel for calendar invites. Create with:
 ```bash
 kubectl create secret generic smtp-credentials \
   --from-literal=host='smtp.example.com' \
@@ -153,8 +140,17 @@ kubectl apply -k deploy/k8s
 # Verify deployment
 kubectl get all -n ticket-scanner
 kubectl logs -n ticket-scanner -l app=scraper
-kubectl logs -n ticket-scanner -l app=telegram-notifier
-kubectl logs -n ticket-scanner -l app=email-notifier
+```
+
+## Upgrading from separate notifier pods
+
+Earlier releases ran `telegram-notifier` and `email-notifier` as their own
+Deployments. `kubectl apply -k` does not delete what the manifests no longer
+list, so remove them when moving to this layout; left running, they would share
+the same durable consumers with web-ui-api and split the deliveries:
+
+```bash
+kubectl delete deployment telegram-notifier email-notifier -n ticket-scanner --ignore-not-found
 ```
 
 ## NATS Streams
