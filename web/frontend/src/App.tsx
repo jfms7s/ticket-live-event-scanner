@@ -6,6 +6,7 @@ import { FilterBar } from './components/FilterBar';
 import { Header } from './components/Header';
 import { useEvents } from './hooks/useEvents';
 import type { BoughtFilter, EventStatusFilter, NotificationStatusFilter, SortKey, SortState } from './types';
+import { UNKNOWN_HUB, hubOptions, matchesHub } from './utils/hub';
 import { getLatestNotificationStatus } from './utils/notifications';
 import { getSortValue } from './utils/sort';
 
@@ -13,6 +14,7 @@ export function App() {
   const [eventStatusFilter, setEventStatusFilter] = useState<EventStatusFilter>('');
   const [notificationStatusFilter, setNotificationStatusFilter] = useState<NotificationStatusFilter>('');
   const [venueFilter, setVenueFilter] = useState('');
+  const [hubFilter, setHubFilter] = useState('');
   const [boughtFilter, setBoughtFilter] = useState<BoughtFilter>('');
   const [sortState, setSortState] = useState<SortState>({ key: null, direction: 'asc' });
   const [actionError, setActionError] = useState<string | null>(null);
@@ -31,6 +33,16 @@ export function App() {
     [events]
   );
 
+  const hubs = useMemo(() => hubOptions(events), [events]);
+  const hasUnknownHub = useMemo(() => events.some((event) => !event.hub_slug), [events]);
+
+  useEffect(() => {
+    const stale = hubFilter === UNKNOWN_HUB ? !hasUnknownHub : !hubs.some((hub) => hub.value === hubFilter);
+    if (hubFilter && stale) {
+      setHubFilter('');
+    }
+  }, [hubs, hasUnknownHub, hubFilter]);
+
   useEffect(() => {
     if (venueFilter && !venues.includes(venueFilter)) {
       setVenueFilter('');
@@ -44,6 +56,7 @@ export function App() {
         if (status !== notificationStatusFilter) return false;
       }
       if (venueFilter && event.venue !== venueFilter) return false;
+      if (!matchesHub(event, hubFilter)) return false;
       if (boughtFilter === 'yes' && !event.purchased) return false;
       if (boughtFilter === 'no' && event.purchased) return false;
       return true;
@@ -61,7 +74,7 @@ export function App() {
     }
 
     return filtered;
-  }, [events, notificationStatusFilter, venueFilter, boughtFilter, sortState]);
+  }, [events, notificationStatusFilter, venueFilter, hubFilter, boughtFilter, sortState]);
 
   function handleSort(key: SortKey) {
     setSortState((prev) =>
@@ -109,6 +122,10 @@ export function App() {
         venueFilter={venueFilter}
         onVenueChange={setVenueFilter}
         venues={venues}
+        hubFilter={hubFilter}
+        onHubChange={setHubFilter}
+        hubs={hubs}
+        hasUnknownHub={hasUnknownHub}
         boughtFilter={boughtFilter}
         onBoughtChange={setBoughtFilter}
         onRefresh={refresh}

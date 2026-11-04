@@ -20,7 +20,7 @@ import (
 // removing a field here means updating types.ts in the same change.
 
 var wantEventKeys = []string{
-	"category", "discovered_at", "event_date", "id", "image_url", "invite_error",
+	"category", "discovered_at", "event_date", "hub_slug", "id", "image_url", "invite_error",
 	"invite_status", "notifications", "purchased", "slug", "status", "title", "url", "venue",
 }
 

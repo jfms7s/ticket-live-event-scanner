@@ -5,14 +5,17 @@ package repository
 
 // EventResponse represents an event in the JSON API response.
 type EventResponse struct {
-	ID            int64                         `json:"id"`
-	Slug          string                        `json:"slug"`
-	Title         string                        `json:"title"`
-	Venue         *string                       `json:"venue"`
-	Category      *string                       `json:"category"`
-	EventDate     *string                       `json:"event_date"`
-	URL           string                        `json:"url"`
-	ImageURL      *string                       `json:"image_url"`
+	ID        int64   `json:"id"`
+	Slug      string  `json:"slug"`
+	Title     string  `json:"title"`
+	Venue     *string `json:"venue"`
+	Category  *string `json:"category"`
+	EventDate *string `json:"event_date"`
+	URL       string  `json:"url"`
+	ImageURL  *string `json:"image_url"`
+	// HubSlug is the hub page that found the event; nil for events stored
+	// before hubs were recorded.
+	HubSlug       *string                       `json:"hub_slug"`
 	DiscoveredAt  string                        `json:"discovered_at"`
 	Purchased     bool                          `json:"purchased"`
 	Status        string                        `json:"status"`

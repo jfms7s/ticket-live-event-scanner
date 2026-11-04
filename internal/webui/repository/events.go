@@ -91,7 +91,7 @@ type rowScanner interface {
 
 // eventColumns is the column list scanEvent expects, in order.
 const eventColumns = `id, slug, title, venue, category, event_date, url, image_url, discovered_at, purchased,
-		       invite_status, invite_error`
+		       invite_status, invite_error, hub_slug`
 
 // scanEvent scans one eventColumns row, computes its status as of now and
 // starts it with an empty notification list. Errors (sql.ErrNoRows
@@ -99,7 +99,7 @@ const eventColumns = `id, slug, title, venue, category, event_date, url, image_u
 func scanEvent(s rowScanner, now time.Time) (EventResponse, error) {
 	var e EventResponse
 	if err := s.Scan(&e.ID, &e.Slug, &e.Title, &e.Venue, &e.Category, &e.EventDate, &e.URL, &e.ImageURL,
-		&e.DiscoveredAt, &e.Purchased, &e.InviteStatus, &e.InviteError); err != nil {
+		&e.DiscoveredAt, &e.Purchased, &e.InviteStatus, &e.InviteError, &e.HubSlug); err != nil {
 		return EventResponse{}, err
 	}
 	e.Status = computeStatus(e.EventDate, now)

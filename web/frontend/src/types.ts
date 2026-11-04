@@ -17,6 +17,8 @@ export interface Event {
   event_date: string | null;
   url: string;
   image_url: string | null;
+  // The hub page that found the event; null for events stored before hubs were recorded.
+  hub_slug: string | null;
   discovered_at: string;
   purchased: boolean;
   status: string;

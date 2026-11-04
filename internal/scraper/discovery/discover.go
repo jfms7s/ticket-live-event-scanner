@@ -108,7 +108,7 @@ func (s *Scraper) fetchHubPage(ctx context.Context, hubSlug string, hubID int64,
 
 		time.Sleep(time.Duration(s.cfg.RequestDelayMS) * time.Millisecond)
 
-		if err := s.fetchAndPublishEvent(ctx, sess); errors.Is(err, errSkip) {
+		if err := s.fetchAndPublishEvent(ctx, sess, hubSlug); errors.Is(err, errSkip) {
 			s.skip(ctx, sess.EventID, err)
 		} else if err != nil {
 			log.Printf("Error fetching detail for hub session event %d: %v", sess.EventID, err)
