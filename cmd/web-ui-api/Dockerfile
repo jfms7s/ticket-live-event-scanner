@@ -44,6 +44,11 @@ RUN apk --no-cache add ca-certificates
 
 WORKDIR /app
 
+# The SQLite database lives in /data (DATABASE_PATH=/data/ticket-scanner.db):
+# mount a volume there. Owned by the runtime user so a fresh named volume,
+# which copies this directory's ownership, is writable.
+RUN mkdir /data && chown 1000:1000 /data
+
 # Copy the binary from the builder
 COPY --from=builder /build/web-ui-api .
 

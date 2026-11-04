@@ -16,7 +16,7 @@ This directory contains Kubernetes manifests to deploy the ticket-scanner servic
 - **web-ui-api.yaml**: Web API backend (Deployment + Service)
   - Go JSON API on port 8080 (exposed via Service on port 80)
   - Liveness/readiness probes on `GET /healthz`
-  - Consumes both NATS streams (`EVENTS`, `NOTIFICATIONS`), materializes into the libsql database
+  - Consumes both NATS streams (`EVENTS`, `NOTIFICATIONS`), materializes into its SQLite database (`/data/ticket-scanner.db` on the `web-ui-api-data` volume)
   - Also runs the scraper (a scrape at start-up and then every hour, pulling ticketline.pt and publishing to NATS `events.discovered`) and the weekly digest (Sunday 19:00 Lisbon); `SCRAPER_ENABLED=false` turns both off. Scrape by hand: `kubectl exec -n ticket-scanner deploy/web-ui-api -- /app/web-ui-api --scrape-once`
   - Also delivers the notifications: Telegram (each new session, the weekly digest) and email calendar invites, from the `telegram-bot-token` and `smtp-credentials` Secrets. A channel whose Secret is missing is disabled, not fatal, and shows as 0 in `ticket_scanner_notifier_enabled` on `/metrics`
   - Also serves the dashboard (the React build is embedded in the binary) at `/`, same origin as `/api`
@@ -80,11 +80,15 @@ kubectl apply -f namespace.yaml -f nats.yaml \
 
 ## Secrets
 
-Three Secrets are required before deployment:
+Two Secrets are required before deployment (`telegram-bot-token` and `smtp-credentials` are each optional: a channel without its Secret is disabled), and a third only when moving from sqld:
 
-### turso-credentials
-libsql database connection details. The URL may point at hosted Turso or at any
-self-hosted libsql-server (sqld), as `docker-compose.yml` does. Create with:
+### turso-credentials (only to move an existing sqld database)
+The database is a SQLite file on the `web-ui-api-data` volume. To bring over the
+data of an earlier release that used a libsql server (hosted Turso or sqld), keep
+this Secret: on its first start with an empty file, web-ui-api copies every table
+from that server, checks row counts and a hash of every value, and does not start
+unless they match. Later starts never import again. Skip it on a fresh install.
+Create with:
 ```bash
 kubectl create secret generic turso-credentials \
   --from-literal=database_url='libsql://your-db-id.turso.io' \
@@ -155,7 +159,7 @@ Each Go service calls `internal/streams.EnsureStreams()` on startup to idempoten
 - **Cluster-internal only**: In these manifests the web UI services (the API, which also serves the dashboard) are ClusterIP services with no Ingress. Access them from within the cluster (e.g., via port-forward for local testing).
 - **Scraper in the API process**: web-ui-api runs the scraper on a ticker (hourly, plus once at start-up). It queries the database to determine known event IDs and publishes only new discoveries.
 - **Single NATS replica**: NATS is deployed as a single-replica StatefulSet for simplicity. It is self-hosted in-cluster per design (not a managed service).
-- **External database**: The database is libsql (hosted Turso or a self-hosted libsql-server), not part of these manifests. Ensure the cluster can reach it.
+- **Database on a volume**: web-ui-api owns one SQLite file (WAL) on a ReadWriteOnce volume, so it runs as a single replica with `Recreate`.
 
 ## Upgrading from the scraper CronJobs
 

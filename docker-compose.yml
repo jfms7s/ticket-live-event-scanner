@@ -1,5 +1,5 @@
-# Local development stack. Mirrors deploy/k8s but swaps Turso for a local
-# libsql-server (sqld) container so the stack runs with no external cloud
+# Local development stack. Mirrors deploy/k8s: NATS and web-ui-api with its
+# SQLite database on a volume, so the stack runs with no external cloud
 # dependencies besides Telegram and the SMTP relay.
 #
 # Usage:
@@ -8,15 +8,6 @@
 #   docker compose exec web-ui-api /app/web-ui-api --scrape-once   # scrape now (it also runs every hour)
 
 services:
-  libsql:
-    image: ghcr.io/tursodatabase/libsql-server:v0.24.33 # same as production (helm-argo-cd)
-    environment:
-      SQLD_NODE: primary
-    volumes:
-      - libsql-data:/var/lib/sqld
-    ports:
-      - "127.0.0.1:8081:8080"
-
   nats:
     # Floating 2.x tag on purpose; Dependabot (docker, /) proposes pinned bumps.
     image: nats:2-alpine
@@ -38,12 +29,10 @@ services:
     depends_on:
       nats:
         condition: service_healthy
-      libsql:
-        condition: service_started
     environment:
       NATS_URL: nats://nats:4222
-      TURSO_DATABASE_URL: http://libsql:8080
-      TURSO_AUTH_TOKEN: local
+      # The SQLite database, on the web-data volume.
+      DATABASE_PATH: /data/ticket-scanner.db
       LISTEN_ADDR: :8080
       # The scraper runs inside this process: at start-up, then every hour, and
       # the weekly digest on Sunday 19:00 Lisbon. Set SCRAPER_ENABLED=false to
@@ -66,9 +55,11 @@ services:
       # SMTP_ALLOW_PLAINTEXT: "true"
       EMAIL_FROM: ${EMAIL_FROM:-}
       EMAIL_TO: ${EMAIL_TO:-}
+    volumes:
+      - web-data:/data
     ports:
       - "127.0.0.1:8080:8080"
 
 volumes:
   nats-data:
-  libsql-data:
+  web-data:

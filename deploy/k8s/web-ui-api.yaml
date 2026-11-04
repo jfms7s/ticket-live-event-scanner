@@ -1,4 +1,15 @@
 apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: web-ui-api-data
+  namespace: ticket-scanner
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
 kind: Service
 metadata:
   name: web-ui-api
@@ -22,9 +33,12 @@ metadata:
   labels:
     app: web-ui-api
   annotations:
-    description: "Web UI API backend. CAUTION: This deployment MUST remain at 1 replica. Multiple replicas would cause data duplication in Turso (multiple replicas consuming the same JetStream consumer group). Use pod disruption budgets or scaling restrictions if needed."
+    description: "Web UI API backend. CAUTION: This deployment MUST remain at 1 replica: it owns the SQLite file on its ReadWriteOnce volume."
 spec:
   replicas: 1
+  # One pod owns the SQLite file: stop the old one before starting the new one.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: web-ui-api
@@ -33,6 +47,8 @@ spec:
       labels:
         app: web-ui-api
     spec:
+      securityContext:
+        fsGroup: 1000
       automountServiceAccountToken: false
       containers:
       - name: web-ui-api
@@ -47,6 +63,9 @@ spec:
             drop: [ALL]
           seccompProfile:
             type: RuntimeDefault
+        volumeMounts:
+        - name: data
+          mountPath: /data
         ports:
         - name: http
           containerPort: 8080
@@ -56,16 +75,25 @@ spec:
         # a .creds file); a half-set pair stops the service. Source them from a Secret.
         - name: NATS_URL
           value: "nats://nats:4222"
+        # The SQLite database, on the web-ui-api-data volume.
+        - name: DATABASE_PATH
+          value: "/data/ticket-scanner.db"
+        # Only to move an existing sqld database into the new SQLite file, once:
+        # a new file is filled from this server at start-up, and the process does
+        # not start unless the copy verifies. Drop both after the first start, or
+        # skip the Secret on a fresh install (optional).
         - name: TURSO_DATABASE_URL
           valueFrom:
             secretKeyRef:
               name: turso-credentials
               key: database_url
+              optional: true
         - name: TURSO_AUTH_TOKEN
           valueFrom:
             secretKeyRef:
               name: turso-credentials
               key: auth_token
+              optional: true
         - name: LISTEN_ADDR
           value: ":8080"
         # The scraper and the weekly digest run in this process (formerly the
@@ -151,3 +179,7 @@ spec:
             port: http
           initialDelaySeconds: 2
           periodSeconds: 5
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: web-ui-api-data
