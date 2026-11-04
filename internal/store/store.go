@@ -15,6 +15,13 @@ import (
 
 // Schema is applied with CREATE TABLE IF NOT EXISTS, so it is safe to run
 // on every service startup that needs it (currently just web-ui-api).
+//
+// Date and time columns are TEXT, not DATE/TIMESTAMP: the code writes and
+// reads them as text, and a DATE-typed column makes modernc.org/sqlite
+// parse them into time.Time on the way out (a different string than was
+// stored). sqld, which production still used when this was written, hands
+// text back for either, so an existing sqld database keeps its old column
+// types and behaves the same.
 const Schema = `
 CREATE TABLE IF NOT EXISTS events (
     id            INTEGER PRIMARY KEY,
@@ -22,10 +29,10 @@ CREATE TABLE IF NOT EXISTS events (
     title         TEXT NOT NULL,
     venue         TEXT,
     category      TEXT,
-    event_date    DATE,
+    event_date    TEXT,
     url           TEXT NOT NULL,
     image_url     TEXT,
-    discovered_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    discovered_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     purchased     BOOLEAN NOT NULL DEFAULT 0,
     invite_status TEXT CHECK (invite_status IN ('pending','sent','failed')),
     invite_error  TEXT,
@@ -38,8 +45,8 @@ CREATE TABLE IF NOT EXISTS notifications (
     event_id            INTEGER NOT NULL REFERENCES events(id),
     status              TEXT NOT NULL CHECK (status IN ('pending','sent','failed')),
     telegram_message_id TEXT,
-    attempted_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    confirmed_at        TIMESTAMP,
+    attempted_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    confirmed_at        TEXT,
     error               TEXT,
     triggered_by        TEXT NOT NULL DEFAULT 'scraper',
     delivery_seq        INTEGER
@@ -52,7 +59,13 @@ CREATE TABLE IF NOT EXISTS watches (
     slug     TEXT PRIMARY KEY,
     label    TEXT NOT NULL DEFAULT '',
     enabled  BOOLEAN NOT NULL DEFAULT 1,
-    added_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Facts about this database file, e.g. that it was filled from sqld (import.go).
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_notifications_event_id ON notifications(event_id);

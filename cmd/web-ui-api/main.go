@@ -71,17 +71,20 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Connect to Turso
-	db, err := store.Connect(cfg.TursoDatabaseURL, cfg.TursoAuthToken)
+	// Open the database and migrate the schema. With DATABASE_PATH this is
+	// the SQLite file; a new one is filled once from the sqld named by
+	// TURSO_DATABASE_URL, and the process does not start unless that copy
+	// verifies (an empty database would make every session look new).
+	db, err := store.Open(ctx, store.Options{
+		Path:        cfg.DatabasePath,
+		LegacyURL:   cfg.TursoDatabaseURL,
+		LegacyToken: cfg.TursoAuthToken,
+		AllowEmpty:  cfg.DatabaseAllowEmpty,
+	})
 	if err != nil {
-		log.Fatalf("Failed to connect to Turso: %v", err)
+		log.Fatalf("Failed to open the database: %v", err)
 	}
 	defer db.Close()
-
-	// Migrate schema
-	if err := store.Migrate(ctx, db); err != nil {
-		log.Fatalf("Failed to migrate schema: %v", err)
-	}
 
 	// Connect to NATS
 	nc, err := natsconn.Connect(cfg.NatsURL, "web-ui-api")
