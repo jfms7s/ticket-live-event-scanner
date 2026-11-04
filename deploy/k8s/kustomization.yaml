@@ -4,7 +4,6 @@ kind: Kustomization
 resources:
   - namespace.yaml
   - nats.yaml
-  - scraper.yaml
   - web-ui-api.yaml
   - networkpolicy.yaml
 
@@ -12,9 +11,6 @@ resources:
 # Keep these tags in step with the production pins in helm-argo-cd
 # values.yaml (ticketScanner.*.image.tag).
 images:
-  - name: ticket-scanner/scraper
-    newName: ghcr.io/jfms7s/ticket-live-event-scanner-scraper
-    newTag: v0.3.0
   - name: ticket-scanner/web-ui-api
     newName: ghcr.io/jfms7s/ticket-live-event-scanner-web-ui-api
     newTag: v0.3.0

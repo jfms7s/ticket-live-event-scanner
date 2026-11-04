@@ -13,19 +13,17 @@ This directory contains Kubernetes manifests to deploy the ticket-scanner servic
   - StatefulSet with 1 replica, image `nats:2-alpine`
   - PersistentVolumeClaim 5Gi for JetStream file storage
   - Headless ClusterIP service on port 4222
-- **scraper.yaml**: Ticket discovery scraper (CronJob)
-  - Scheduled hourly (`0 * * * *`)
-  - Pulls event data from ticketline.pt, publishes to NATS `events.discovered`
 - **web-ui-api.yaml**: Web API backend (Deployment + Service)
   - Go JSON API on port 8080 (exposed via Service on port 80)
   - Liveness/readiness probes on `GET /healthz`
   - Consumes both NATS streams (`EVENTS`, `NOTIFICATIONS`), materializes into the libsql database
+  - Also runs the scraper (a scrape at start-up and then every hour, pulling ticketline.pt and publishing to NATS `events.discovered`) and the weekly digest (Sunday 19:00 Lisbon); `SCRAPER_ENABLED=false` turns both off. Scrape by hand: `kubectl exec -n ticket-scanner deploy/web-ui-api -- /app/web-ui-api --scrape-once`
   - Also delivers the notifications: Telegram (each new session, the weekly digest) and email calendar invites, from the `telegram-bot-token` and `smtp-credentials` Secrets. A channel whose Secret is missing is disabled, not fatal, and shows as 0 in `ticket_scanner_notifier_enabled` on `/metrics`
   - Also serves the dashboard (the React build is embedded in the binary) at `/`, same origin as `/api`
   - These manifests define no Ingress
 - **networkpolicy.yaml**: Ingress NetworkPolicies (egress is not restricted)
   - Default-deny ingress for every pod in the namespace
-  - NATS `4222` only from `scraper` and `web-ui-api` pods
+  - NATS `4222` only from `web-ui-api` pods
   - `web-ui-api` `8080` from pods in this namespace and from `kube-system` (k3s Traefik)
   - The services accept optional NATS credentials (`NATS_TOKEN`, `NATS_USER` + `NATS_PASSWORD`, or `NATS_CREDS`); this broker runs without auth
 - **secrets.example.yaml**: Placeholder Secret templates (see "Secrets" section below)
@@ -33,7 +31,7 @@ This directory contains Kubernetes manifests to deploy the ticket-scanner servic
 
 ## Images
 
-The raw manifests reference local placeholder image names (e.g. `ticket-scanner/scraper:local`).
+The raw manifests reference local placeholder image names (e.g. `ticket-scanner/web-ui-api:local`).
 `kustomization.yaml` rewrites these at apply-time via its `images:` section, so
 `kubectl apply -k deploy/k8s` always deploys the GHCR images, not the placeholders.
 
@@ -45,7 +43,6 @@ A manual run (`workflow_dispatch`) pushes the tag name when started from a tag, 
 commit SHA when started from a branch. Merging to `master` pushes no images, and there is no
 `latest` tag:
 
-- `ghcr.io/jfms7s/ticket-live-event-scanner-scraper`
 - `ghcr.io/jfms7s/ticket-live-event-scanner-web-ui-api`
 
 `kustomization.yaml` pins every image to the newest release tag. To deploy another release,
@@ -54,7 +51,6 @@ bump the tag before applying:
 ```bash
 cd deploy/k8s
 kustomize edit set image \
-  ticket-scanner/scraper=ghcr.io/jfms7s/ticket-live-event-scanner-scraper:<vX.Y.Z> \
   ticket-scanner/web-ui-api=ghcr.io/jfms7s/ticket-live-event-scanner-web-ui-api:<vX.Y.Z>
 kubectl apply -k .
 ```
@@ -71,15 +67,13 @@ image rewrite) with locally built images:
 
 ```bash
 # Build images
-docker build -t ticket-scanner/scraper:local -f cmd/scraper/Dockerfile .
 docker build -t ticket-scanner/web-ui-api:local -f cmd/web-ui-api/Dockerfile .
 
 # Load into cluster
-kind load docker-image ticket-scanner/scraper:local
 kind load docker-image ticket-scanner/web-ui-api:local
 
 # Apply each manifest directly, not via `-k`, so the :local tags aren't rewritten
-kubectl apply -f namespace.yaml -f nats.yaml -f scraper.yaml \
+kubectl apply -f namespace.yaml -f nats.yaml \
   -f web-ui-api.yaml \
   -f networkpolicy.yaml
 ```
@@ -139,7 +133,6 @@ kubectl apply -k deploy/k8s
 
 # Verify deployment
 kubectl get all -n ticket-scanner
-kubectl logs -n ticket-scanner -l app=scraper
 ```
 
 ## Upgrading from separate notifier pods
@@ -160,6 +153,15 @@ Each Go service calls `internal/streams.EnsureStreams()` on startup to idempoten
 ## Architecture Notes
 
 - **Cluster-internal only**: In these manifests the web UI services (the API, which also serves the dashboard) are ClusterIP services with no Ingress. Access them from within the cluster (e.g., via port-forward for local testing).
-- **Stateless scraper**: The scraper is a CronJob that runs once per hour. It queries the database to determine known event IDs and publishes only new discoveries.
+- **Scraper in the API process**: web-ui-api runs the scraper on a ticker (hourly, plus once at start-up). It queries the database to determine known event IDs and publishes only new discoveries.
 - **Single NATS replica**: NATS is deployed as a single-replica StatefulSet for simplicity. It is self-hosted in-cluster per design (not a managed service).
 - **External database**: The database is libsql (hosted Turso or a self-hosted libsql-server), not part of these manifests. Ensure the cluster can reach it.
+
+## Upgrading from the scraper CronJobs
+
+Earlier releases ran the scraper as a CronJob (and the digest as a second one). `kubectl apply -k` does not delete what the manifests no longer list, so remove them when moving to this layout; left running they would scrape beside the in-process ticker (harmless, the dedup holds, but wasteful):
+
+```bash
+kubectl delete cronjob scraper -n ticket-scanner --ignore-not-found
+kubectl delete serviceaccount,role,rolebinding scraper -n ticket-scanner --ignore-not-found
+```

@@ -5,7 +5,7 @@
 # Usage:
 #   cp .env.example .env   # fill in the Telegram and SMTP variables (see .env.example)
 #   docker compose up --build
-#   docker compose run --rm scraper   # scraper is a CronJob in k8s; run on demand here
+#   docker compose exec web-ui-api /app/web-ui-api --scrape-once   # scrape now (it also runs every hour)
 
 services:
   libsql:
@@ -45,6 +45,14 @@ services:
       TURSO_DATABASE_URL: http://libsql:8080
       TURSO_AUTH_TOKEN: local
       LISTEN_ADDR: :8080
+      # The scraper runs inside this process: at start-up, then every hour, and
+      # the weekly digest on Sunday 19:00 Lisbon. Set SCRAPER_ENABLED=false to
+      # run the dashboard only.
+      # Seeds the watches table when it is empty; after that the hubs are
+      # managed on the dashboard's Watches page.
+      TICKETLINE_HUB_PAGES: >-
+        https://www.ticketline.pt/evento/auchan-live-academia-maia-98164,
+        https://www.ticketline.pt/evento/auchan-live-academia-aveiro-98167
       # Delivery channels: one whose variables are not all set is disabled.
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
@@ -60,29 +68,6 @@ services:
       EMAIL_TO: ${EMAIL_TO:-}
     ports:
       - "127.0.0.1:8080:8080"
-
-  scraper:
-    build:
-      context: .
-      dockerfile: cmd/scraper/Dockerfile
-    depends_on:
-      nats:
-        condition: service_healthy
-      libsql:
-        condition: service_started
-    environment:
-      # Seeds the watches table when it is empty; after that the hubs are
-      # managed on the dashboard's Watches page.
-      TICKETLINE_HUB_PAGES: >-
-        https://www.ticketline.pt/evento/auchan-live-academia-maia-98164,
-        https://www.ticketline.pt/evento/auchan-live-academia-aveiro-98167
-      NATS_URL: nats://nats:4222
-      TURSO_DATABASE_URL: http://libsql:8080
-      TURSO_AUTH_TOKEN: local
-      USER_AGENT: "ticket-live-event-scanner/0.1"
-      REQUEST_DELAY_MS: "1500"
-    profiles:
-      - tools
 
 volumes:
   nats-data:
