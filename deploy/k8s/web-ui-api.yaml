@@ -80,8 +80,12 @@ spec:
           value: "/data/ticket-scanner.db"
         # Only to move an existing sqld database into the new SQLite file, once:
         # a new file is filled from this server at start-up, and the process does
-        # not start unless the copy verifies. Drop both after the first start, or
-        # skip the Secret on a fresh install (optional).
+        # not start unless the copy verifies. REMOVE both after the first start (a
+        # lost volume with them still set would copy the frozen sqld over newer
+        # state). On a fresh install leave them out and set DATABASE_ALLOW_EMPTY
+        # below; without either, an empty database is refused.
+        # - name: DATABASE_ALLOW_EMPTY
+        #   value: "true"
         - name: TURSO_DATABASE_URL
           valueFrom:
             secretKeyRef:

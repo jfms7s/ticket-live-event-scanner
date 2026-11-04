@@ -4,9 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // productionLikeSource builds what sqld holds today: the tables as they were
@@ -223,7 +227,7 @@ func TestFreshSchemaReturnsDatesAsWrittenText(t *testing.T) {
 func TestOpenCreatesAWorkingWALDatabase(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "x.db")
-	db, err := Open(ctx, Options{Path: path})
+	db, err := Open(ctx, Options{Path: path, AllowEmpty: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +242,7 @@ func TestOpenCreatesAWorkingWALDatabase(t *testing.T) {
 		t.Errorf("busy_timeout = %s, want 5000", got)
 	}
 	// A second process (web-ui-api --scrape-once) opens the same file.
-	db2, err := Open(ctx, Options{Path: path})
+	db2, err := Open(ctx, Options{Path: path, AllowEmpty: true})
 	if err != nil {
 		t.Fatalf("second open: %v", err)
 	}
@@ -246,5 +250,85 @@ func TestOpenCreatesAWorkingWALDatabase(t *testing.T) {
 	mustExec(t, db, `INSERT INTO watches (slug) VALUES ('a-1')`)
 	if got := scalar(t, db2, `SELECT COUNT(*) FROM watches`); got != "1" {
 		t.Errorf("second handle sees %s watches, want 1", got)
+	}
+}
+
+// A missing or misnamed Secret must not look like a fresh install: the
+// scraper would find every session new.
+func TestOpenRefusesAnEmptyDatabaseWithNothingToImportFrom(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "x.db")
+	if _, err := Open(context.Background(), Options{Path: path}); !errors.Is(err, ErrEmptyDatabase) {
+		t.Fatalf("err = %v, want ErrEmptyDatabase", err)
+	}
+	// A fresh install says so.
+	db, err := Open(context.Background(), Options{Path: path, AllowEmpty: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, db, `INSERT INTO events (id, slug, title, url) VALUES (1, 's', 't', 'u')`)
+	db.Close()
+	// Once it has data it is not "empty" any more, and restarts need no flag.
+	db, err = Open(context.Background(), Options{Path: path})
+	if err != nil {
+		t.Fatalf("restart of a database with data: %v", err)
+	}
+	db.Close()
+}
+
+func TestOpenImportsThroughItsOwnHandleAndKeepsForeignKeysOnAfterwards(t *testing.T) {
+	defer func(old func(string, string) (*sql.DB, error)) { connectLegacy = old }(connectLegacy)
+	src := productionLikeSource(t)
+	// An orphan: a notification whose event the server does not have.
+	mustExec(t, src, `INSERT INTO notifications (id, event_id, status) VALUES (9, 424242, 'sent')`)
+	connectLegacy = func(string, string) (*sql.DB, error) { return src, nil }
+
+	path := filepath.Join(t.TempDir(), "x.db")
+	db, err := Open(context.Background(), Options{Path: path, LegacyURL: "libsql://x"})
+	if err != nil {
+		t.Fatalf("an orphan row stopped the import: %v", err)
+	}
+	defer db.Close()
+	if got := scalar(t, db, `SELECT COUNT(*) FROM notifications`); got != "3" {
+		t.Errorf("notifications = %s, want all 3 including the orphan", got)
+	}
+	if got := scalar(t, db, `PRAGMA foreign_keys`); got != "1" {
+		t.Errorf("foreign_keys = %s after the import, want 1", got)
+	}
+}
+
+// A legacy server that accepts the connection and never answers stops the
+// start with an error once the import's time is up.
+func TestOpenGivesUpOnAHungLegacyServer(t *testing.T) {
+	defer func(old func(string, string) (*sql.DB, error), d time.Duration) {
+		connectLegacy, importTimeout = old, d
+	}(connectLegacy, importTimeout)
+	importTimeout = 1500 * time.Millisecond
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	hang := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-release }))
+	hang.Listener.Close()
+	hang.Listener = ln
+	hang.Start()
+	defer func() {
+		close(release) // lets the handlers return before Close waits for them
+		hang.Close()
+	}()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := Open(context.Background(), Options{Path: filepath.Join(t.TempDir(), "x.db"), LegacyURL: hang.URL})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Open succeeded against a server that never answers")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Open is still waiting for the hung server after 10 s")
 	}
 }

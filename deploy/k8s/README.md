@@ -87,7 +87,9 @@ The database is a SQLite file on the `web-ui-api-data` volume. To bring over the
 data of an earlier release that used a libsql server (hosted Turso or sqld), keep
 this Secret: on its first start with an empty file, web-ui-api copies every table
 from that server, checks row counts and a hash of every value, and does not start
-unless they match. Later starts never import again. Skip it on a fresh install.
+unless they match. Later starts never import again. Remove the two `TURSO_*` variables from `web-ui-api.yaml` after the first start: the marker stops a second import while the file exists, but a lost volume with them still set would copy the sqld's frozen snapshot over newer state. A fresh install has no sqld: leave them out and set `DATABASE_ALLOW_EMPTY=true`, since an empty database with nothing to import (what a missing or misnamed Secret also looks like) is otherwise refused.
+
+**Rollback.** The sqld is never written to. Pinning the previous release makes it use the sqld again, but with its data as of the cutover: events, purchase and hide flags and notification outcomes recorded in SQLite since then are not there.
 Create with:
 ```bash
 kubectl create secret generic turso-credentials \

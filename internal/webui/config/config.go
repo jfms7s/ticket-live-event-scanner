@@ -10,10 +10,14 @@ type Config struct {
 	// TURSO_DATABASE_URL / TURSO_AUTH_TOKEN are optional and name an sqld
 	// to import from once, into a new file (see store.Open). When it is
 	// unset, the database is that sqld, as before.
-	DatabasePath     string
-	TursoDatabaseURL string
-	TursoAuthToken   string
-	ListenAddr       string
+	DatabasePath string
+	// DatabaseAllowEmpty is DATABASE_ALLOW_EMPTY=true: start on an empty
+	// SQLite file with nothing to import (a fresh install). Otherwise that
+	// start is refused (see store.Options.AllowEmpty).
+	DatabaseAllowEmpty bool
+	TursoDatabaseURL   string
+	TursoAuthToken     string
+	ListenAddr         string
 	// CORSOrigin is the dashboard origin allowed to call the API; empty
 	// (the default) sends no CORS headers.
 	CORSOrigin string
@@ -28,11 +32,12 @@ func Load() Config {
 		tursoURL, tursoToken = envconfig.Required("TURSO_DATABASE_URL"), envconfig.Required("TURSO_AUTH_TOKEN")
 	}
 	return Config{
-		NatsURL:          envconfig.NatsURL(),
-		DatabasePath:     path,
-		TursoDatabaseURL: tursoURL,
-		TursoAuthToken:   tursoToken,
-		ListenAddr:       envconfig.String("LISTEN_ADDR", ":8080"),
-		CORSOrigin:       envconfig.String("CORS_ORIGIN", ""),
+		NatsURL:            envconfig.NatsURL(),
+		DatabasePath:       path,
+		DatabaseAllowEmpty: envconfig.Bool("DATABASE_ALLOW_EMPTY"),
+		TursoDatabaseURL:   tursoURL,
+		TursoAuthToken:     tursoToken,
+		ListenAddr:         envconfig.String("LISTEN_ADDR", ":8080"),
+		CORSOrigin:         envconfig.String("CORS_ORIGIN", ""),
 	}
 }

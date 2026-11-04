@@ -33,6 +33,8 @@ services:
       NATS_URL: nats://nats:4222
       # The SQLite database, on the web-data volume.
       DATABASE_PATH: /data/ticket-scanner.db
+      # A fresh local database; without it an empty file with nothing to import is refused.
+      DATABASE_ALLOW_EMPTY: "true"
       LISTEN_ADDR: :8080
       # The scraper runs inside this process: at start-up, then every hour, and
       # the weekly digest on Sunday 19:00 Lisbon. Set SCRAPER_ENABLED=false to

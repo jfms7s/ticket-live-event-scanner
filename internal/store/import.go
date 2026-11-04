@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 )
 
 // Options say where the database is. With Path set it is the SQLite file at
@@ -19,7 +20,17 @@ type Options struct {
 	Path        string
 	LegacyURL   string
 	LegacyToken string
+	// AllowEmpty lets the process start on a SQLite file that is new and
+	// empty with no legacy server to fill it from: a fresh install. Without
+	// it that start is refused, because it is also what a missing or
+	// misnamed Secret looks like, and a scraper on an empty database finds
+	// every session "new" and notifies them all again.
+	AllowEmpty bool
 }
+
+// importTimeout bounds filling the file from sqld, so a hung server stops
+// the start with an error instead of holding it (and the write lock) open.
+var importTimeout = 3 * time.Minute
 
 // Open opens the database, creates or upgrades its schema and, for a new
 // SQLite file with a legacy server configured, imports the server's data.
@@ -44,14 +55,52 @@ func Open(ctx context.Context, o Options) (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
-	if o.LegacyURL != "" {
-		if err := importLegacyOnce(ctx, o, db); err != nil {
-			db.Close()
-			return nil, err
-		}
+	if err := fillOrRefuse(ctx, o, db); err != nil {
+		db.Close()
+		return nil, err
 	}
 	return db, nil
 }
+
+// fillOrRefuse decides what a SQLite file with no import marker needs: the
+// import from sqld, nothing (it already has data), or a refusal (it is empty
+// and nothing says that is intended).
+func fillOrRefuse(ctx context.Context, o Options, db *sql.DB) error {
+	var marked int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM meta WHERE key = ?`, importedKey).Scan(&marked); err != nil {
+		return fmt.Errorf("check import marker: %w", err)
+	}
+	if marked > 0 {
+		return nil
+	}
+
+	if o.LegacyURL != "" {
+		// The copy runs on its own handle with foreign keys off: it copies
+		// the server's rows as they are, and a pooled connection would
+		// enforce keys the server may not have.
+		imp, err := openSQLiteDB(ctx, o.Path, false)
+		if err != nil {
+			return err
+		}
+		defer imp.Close()
+		ictx, cancel := context.WithTimeout(ctx, importTimeout)
+		defer cancel()
+		return importLegacyOnce(ictx, o, imp)
+	}
+
+	empty, err := isEmpty(ctx, db)
+	if err != nil {
+		return err
+	}
+	if empty && !o.AllowEmpty {
+		return ErrEmptyDatabase
+	}
+	return nil
+}
+
+// ErrEmptyDatabase is returned when the SQLite file is empty, was never
+// imported into and nothing allows starting empty.
+var ErrEmptyDatabase = errors.New("the SQLite database is empty and no sqld to import from is configured (TURSO_DATABASE_URL, TURSO_AUTH_TOKEN): check the Secret; set DATABASE_ALLOW_EMPTY=true only for a fresh install")
 
 // importedKey is the meta row that says the file was filled from sqld. It is
 // written in the transaction that copies the data, so it exists exactly when
@@ -112,6 +161,7 @@ func importLegacyOnce(ctx context.Context, o Options, dst *sql.DB) error {
 		return fmt.Errorf("import from sqld: %w", err)
 	}
 	log.Printf("Imported the database from sqld into SQLite: %s", summary)
+	log.Printf("WARN the SQLite file is now the database. Remove TURSO_DATABASE_URL and TURSO_AUTH_TOKEN from this deployment: if the volume were ever lost with them still set, the next start would copy the sqld's frozen snapshot over newer state.")
 	return nil
 }
 
@@ -130,7 +180,9 @@ func isEmpty(ctx context.Context, db *sql.DB) (bool, error) {
 
 // copyAll copies every table in one transaction on dst, checks the copy
 // against what was read (row count and a hash of every value) before it
-// commits, and records the marker in the same transaction.
+// commits, and records the marker in the same transaction. Verification is
+// of every value as text (CAST AS TEXT): a REAL or BLOB that the text round
+// trip would change is not detected, and this schema has none.
 func copyAll(ctx context.Context, src, dst *sql.DB) (string, error) {
 	tx, err := dst.BeginTx(ctx, nil)
 	if err != nil {
@@ -138,12 +190,8 @@ func copyAll(ctx context.Context, src, dst *sql.DB) (string, error) {
 	}
 	defer tx.Rollback()
 
-	// The copy is faithful, including rows the live server would refuse
-	// today; the foreign keys are checked after, and reported.
-	if _, err := tx.ExecContext(ctx, `PRAGMA defer_foreign_keys = ON`); err != nil {
-		return "", fmt.Errorf("defer foreign keys: %w", err)
-	}
-
+	// The copy is faithful, including rows that break a foreign key (the
+	// caller's handle does not enforce them); the check after is reported.
 	var parts []string
 	for _, t := range importTables {
 		cols, err := sharedColumns(ctx, src, tx, t.name)

@@ -79,6 +79,7 @@ func main() {
 		Path:        cfg.DatabasePath,
 		LegacyURL:   cfg.TursoDatabaseURL,
 		LegacyToken: cfg.TursoAuthToken,
+		AllowEmpty:  cfg.DatabaseAllowEmpty,
 	})
 	if err != nil {
 		log.Fatalf("Failed to open the database: %v", err)
