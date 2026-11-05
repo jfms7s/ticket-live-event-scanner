@@ -5,10 +5,6 @@ import (
 	"log"
 	"net/http"
 	"strconv"
-	"time"
-
-	"github.com/jfms7s/ticket-live-event-scanner/internal/event"
-	"github.com/jfms7s/ticket-live-event-scanner/internal/webui/repository"
 )
 
 func derefString(s *string) string {
@@ -47,59 +43,4 @@ func pathID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 		return 0, false
 	}
 	return id, true
-}
-
-// storedEvent holds the fields event.Discovered and event.Purchased share,
-// taken from a stored event. derefString turns a nil optional field into
-// "", which the notifiers treat as absent (the date line is just omitted).
-type storedEvent struct {
-	EventID                              int64
-	Slug, Title, URL                     string
-	Venue, Category, EventDate, ImageURL string
-	HubSlug                              string
-}
-
-func storedEventFrom(e *repository.EventResponse) storedEvent {
-	return storedEvent{
-		EventID:   e.ID,
-		Slug:      e.Slug,
-		Title:     e.Title,
-		URL:       e.URL,
-		Venue:     derefString(e.Venue),
-		Category:  derefString(e.Category),
-		EventDate: derefString(e.EventDate),
-		ImageURL:  derefString(e.ImageURL),
-		HubSlug:   derefString(e.HubSlug),
-	}
-}
-
-// discovered builds a Discovered message with the given reason.
-func (s storedEvent) discovered(reason string) *event.Discovered {
-	return &event.Discovered{
-		EventID:   s.EventID,
-		Slug:      s.Slug,
-		Title:     s.Title,
-		Venue:     s.Venue,
-		Category:  s.Category,
-		EventDate: s.EventDate,
-		URL:       s.URL,
-		ImageURL:  s.ImageURL,
-		Reason:    reason,
-		HubSlug:   s.HubSlug,
-	}
-}
-
-// purchased builds a Purchased message stamped with at.
-func (s storedEvent) purchased(at time.Time) *event.Purchased {
-	return &event.Purchased{
-		EventID:     s.EventID,
-		Slug:        s.Slug,
-		Title:       s.Title,
-		Venue:       s.Venue,
-		Category:    s.Category,
-		EventDate:   s.EventDate,
-		URL:         s.URL,
-		ImageURL:    s.ImageURL,
-		PurchasedAt: at,
-	}
 }

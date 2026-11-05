@@ -12,7 +12,8 @@ import (
 // run rather than look like "no new sessions".
 func TestDiscoverFailsOnAHubPageWithNoCards(t *testing.T) {
 	site := newHubSite(t) // lists no sessions
-	s, err := skipRun(t, site, newMemKV(), newMemKV(), &recordingPublisher{})
+	db := migratedDB(t)
+	s, err := skipRun(t, site, db, newQueue(db))
 	if err == nil {
 		t.Fatal("Discover = nil for a hub page with no cards, want an error")
 	}
@@ -23,9 +24,10 @@ func TestDiscoverFailsOnAHubPageWithNoCards(t *testing.T) {
 
 func TestDiscoverFailsOnAHubSlugWithoutAnID(t *testing.T) {
 	site := newHubSite(t, 101)
-	pub := &recordingPublisher{}
+	db := migratedDB(t)
+	pub := newQueue(db)
 	cfg := config.Config{UserAgent: "test", HubPages: []string{"no-id-here", hubSlug}}
-	s := newScraper(cfg, site.srv.URL, newSeenStore(newMemKV(), migratedDB(t)), pub)
+	s := newScraper(cfg, site.srv.URL, db, pub)
 	if err := s.LoadKnownIDs(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -38,10 +40,13 @@ func TestDiscoverFailsOnAHubSlugWithoutAnID(t *testing.T) {
 
 func TestDiscoverDoesNotFetchAKnownSession(t *testing.T) {
 	site := newHubSite(t, 101, 102)
-	seen, skipped, pub := newMemKV(), newMemKV(), &recordingPublisher{}
-	seen.keys["101"] = true
+	db := migratedDB(t)
+	if _, err := db.Exec(`INSERT INTO events (id, slug, title, url) VALUES (101, 's', 't', 'u')`); err != nil {
+		t.Fatal(err)
+	}
+	pub := newQueue(db)
 
-	if _, err := skipRun(t, site, seen, skipped, pub); err != nil {
+	if _, err := skipRun(t, site, db, pub); err != nil {
 		t.Fatal(err)
 	}
 	if n := site.detailFetches[101]; n != 0 {

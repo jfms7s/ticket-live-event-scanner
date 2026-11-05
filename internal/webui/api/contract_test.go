@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/outbox"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -86,7 +87,7 @@ func TestNotificationResponseJSONUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	app := &App{db: db, js: NewMockJetStream()}
+	app := &App{db: db, queue: &outbox.Queue{DB: db}}
 	server := httptest.NewServer(app.NewMux())
 	defer server.Close()
 
@@ -121,7 +122,7 @@ func TestErrorResponsesAreJSON(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	app := &App{db: db, js: NewMockJetStream()}
+	app := &App{db: db, queue: &outbox.Queue{DB: db}}
 	server := httptest.NewServer(app.NewMux())
 	defer server.Close()
 

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/jfms7s/ticket-live-event-scanner/internal/outbox"
 )
 
 // ListEvents returns every visible (not hidden) event with its
@@ -110,17 +112,22 @@ func scanEvent(s rowScanner, now time.Time) (EventResponse, error) {
 // SetEventPurchased sets the purchased flag for a single event and reports
 // whether it changed. It returns sql.ErrNoRows if no visible event with
 // that ID exists. Setting a flag that is already set changes nothing, so a
-// double submit doesn't publish a second invite. Marking an unpurchased
+// double submit doesn't queue a second invite. Marking an unpurchased
 // event purchased also sets its invite to pending (clearing any earlier
-// error) in the same UPDATE, since the caller then publishes a new invite
-// request. Unmarking leaves the invite state alone: an invite already sent
+// error) and queues the invite email in the same transaction. Unmarking leaves the invite state alone: an invite already sent
 // stays sent.
 func SetEventPurchased(ctx context.Context, db *sql.DB, id int64, purchased bool) (changed bool, err error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin: %w", err)
+	}
+	defer tx.Rollback()
+
 	query := `UPDATE events SET purchased = 0 WHERE id = ? AND hidden = 0 AND purchased <> 0`
 	if purchased {
 		query = `UPDATE events SET purchased = 1, invite_status = 'pending', invite_error = NULL WHERE id = ? AND hidden = 0 AND purchased = 0`
 	}
-	result, err := db.ExecContext(ctx, query, id)
+	result, err := tx.ExecContext(ctx, query, id)
 	if err != nil {
 		return false, fmt.Errorf("update purchased: %w", err)
 	}
@@ -130,13 +137,23 @@ func SetEventPurchased(ctx context.Context, db *sql.DB, id int64, purchased bool
 		return false, fmt.Errorf("rows affected: %w", err)
 	}
 	if rows > 0 {
+		// The invite is queued in the same transaction as the flag, so
+		// "purchased, invite pending" can never exist without its email.
+		if purchased {
+			if err := outbox.EnqueueInvite(ctx, tx, id, time.Now()); err != nil {
+				return false, err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return false, fmt.Errorf("commit: %w", err)
+		}
 		return true, nil
 	}
 
 	// Nothing changed: either the flag already had this value or there is
 	// no such visible event.
 	var one int
-	err = db.QueryRowContext(ctx, `SELECT 1 FROM events WHERE id = ? AND hidden = 0`, id).Scan(&one)
+	err = tx.QueryRowContext(ctx, `SELECT 1 FROM events WHERE id = ? AND hidden = 0`, id).Scan(&one)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, sql.ErrNoRows

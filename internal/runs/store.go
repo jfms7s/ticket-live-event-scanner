@@ -10,18 +10,16 @@ import (
 	"slices"
 	"sync"
 	"time"
-
-	"github.com/nats-io/nats.go/jetstream"
 )
 
-// Putter is the part of jetstream.KeyValue Write uses.
-type Putter interface {
-	Put(ctx context.Context, key string, value []byte) (uint64, error)
+// Sink is where Write stores the records: key -> JSON value.
+type Sink interface {
+	Put(ctx context.Context, key string, value []byte) error
 }
 
 // Write stores every record, carrying on past a failed one so the others
 // are still recorded, and returns the failures joined.
-func Write(ctx context.Context, kv Putter, records []Record) error {
+func Write(ctx context.Context, kv Sink, records []Record) error {
 	var errs []error
 	for _, r := range records {
 		data, err := json.Marshal(r)
@@ -29,17 +27,20 @@ func Write(ctx context.Context, kv Putter, records []Record) error {
 			errs = append(errs, fmt.Errorf("marshal run record %s: %w", Key(r), err))
 			continue
 		}
-		if _, err := kv.Put(ctx, Key(r), data); err != nil {
+		if err := kv.Put(ctx, Key(r), data); err != nil {
 			errs = append(errs, fmt.Errorf("put run record %s: %w", Key(r), err))
 		}
 	}
 	return errors.Join(errs...)
 }
 
-// KV is the part of jetstream.KeyValue the Reader uses.
+// KV is where the Reader reads the records from.
 type KV interface {
-	ListKeys(ctx context.Context, opts ...jetstream.WatchOpt) (jetstream.KeyLister, error)
-	Get(ctx context.Context, key string) (jetstream.KeyValueEntry, error)
+	// Keys lists every key.
+	Keys(ctx context.Context) ([]string, error)
+	// Get returns the value at key; ok is false when there is none (it
+	// expired between Keys and Get).
+	Get(ctx context.Context, key string) (value []byte, ok bool, err error)
 }
 
 // EmptyRunsThreshold is how many successful runs in a row a hub must list
@@ -88,7 +89,7 @@ type Summary struct {
 	Runs []Record `json:"runs"`
 }
 
-// Reader reads the runs bucket. Records never change once written (the key
+// Reader reads the run log. Records never change once written (the key
 // holds the run's start time), so it caches decoded records by key and
 // fetches only keys it has not seen. It is safe for concurrent use.
 type Reader struct {
@@ -238,19 +239,18 @@ func (r *Reader) hubStatus(ctx context.Context, keys []key) (HubStatus, bool, er
 // listKeys lists and parses every key, dropping cache entries for keys
 // that have expired. A key that doesn't parse is logged and ignored.
 func (r *Reader) listKeys(ctx context.Context) ([]key, error) {
-	lister, err := r.kv.ListKeys(ctx)
-	if errors.Is(err, jetstream.ErrNoKeysFound) {
-		r.prune(nil)
-		return nil, nil
-	}
+	names, err := r.kv.Keys(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list run keys: %w", err)
 	}
-	defer lister.Stop()
+	if len(names) == 0 {
+		r.prune(nil)
+		return nil, nil
+	}
 
 	var keys []key
 	listed := map[string]bool{}
-	for s := range lister.Keys() {
+	for _, s := range names {
 		k, err := parseKey(s)
 		if err != nil {
 			log.Printf("WARN ignoring %v", err)
@@ -258,11 +258,6 @@ func (r *Reader) listKeys(ctx context.Context) ([]key, error) {
 		}
 		keys = append(keys, k)
 		listed[s] = true
-	}
-	// ListKeys closes its channel without an error when ctx ends, so a
-	// short list may be a cut-off one.
-	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("list run keys: %w", err)
 	}
 	r.prune(listed)
 	return keys, nil
@@ -290,14 +285,14 @@ func (r *Reader) get(ctx context.Context, k key) (Record, bool, error) {
 		return rec, true, nil
 	}
 
-	entry, err := r.kv.Get(ctx, s)
-	if errors.Is(err, jetstream.ErrKeyNotFound) || errors.Is(err, jetstream.ErrKeyDeleted) {
-		return Record{}, false, nil
-	}
+	value, ok, err := r.kv.Get(ctx, s)
 	if err != nil {
 		return Record{}, false, fmt.Errorf("get run record %s: %w", s, err)
 	}
-	if err := json.Unmarshal(entry.Value(), &rec); err != nil {
+	if !ok {
+		return Record{}, false, nil
+	}
+	if err := json.Unmarshal(value, &rec); err != nil {
 		log.Printf("WARN ignoring run record %s: %v", s, err)
 		return Record{}, false, nil
 	}

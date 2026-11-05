@@ -10,7 +10,7 @@ import (
 )
 
 func TestDashboardAndAPIShareTheMux(t *testing.T) {
-	app := NewApp(setupTestDB(t), &MockJetStream{})
+	app := NewApp(setupTestDB(t), nil)
 	app.SetStatic(static.Handler(fstest.MapFS{
 		"index.html":    {Data: []byte("<html>dash</html>")},
 		"assets/a-1.js": {Data: []byte("x")},
@@ -44,7 +44,7 @@ func TestDashboardAndAPIShareTheMux(t *testing.T) {
 }
 
 func TestNoDashboardWithoutStatic(t *testing.T) {
-	app := NewApp(setupTestDB(t), &MockJetStream{})
+	app := NewApp(setupTestDB(t), nil)
 	rec := httptest.NewRecorder()
 	app.NewMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	if rec.Code != http.StatusNotFound {

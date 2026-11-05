@@ -13,7 +13,7 @@ import (
 
 func watchesServer(t *testing.T) (*App, *httptest.Server) {
 	t.Helper()
-	app := NewApp(setupTestDB(t), &MockJetStream{})
+	app := NewApp(setupTestDB(t), nil)
 	srv := httptest.NewServer(RequireCustomHeader(app.NewMux()))
 	t.Cleanup(srv.Close)
 	return app, srv

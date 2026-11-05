@@ -2,15 +2,16 @@ package runs
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/nats-io/nats.go/jetstream"
+	_ "modernc.org/sqlite"
 )
 
-// memKV is an in-memory stand-in for the runs bucket.
+// memKV is an in-memory stand-in for the run log.
 type memKV struct {
 	mu      sync.Mutex
 	vals    map[string][]byte
@@ -21,39 +22,38 @@ type memKV struct {
 
 func newMemKV() *memKV { return &memKV{vals: map[string][]byte{}} }
 
-func (m *memKV) Put(_ context.Context, key string, value []byte) (uint64, error) {
+func (m *memKV) Put(_ context.Context, key string, value []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.vals[key] = value
-	return uint64(len(m.vals)), nil
+	return nil
 }
 
-func (m *memKV) Get(_ context.Context, key string) (jetstream.KeyValueEntry, error) {
+func (m *memKV) Get(_ context.Context, key string) ([]byte, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.gets++
 	if m.getErr != nil {
-		return nil, m.getErr
+		return nil, false, m.getErr
 	}
 	v, ok := m.vals[key]
-	if !ok {
-		return nil, jetstream.ErrKeyNotFound
-	}
-	return entry{key: key, value: v}, nil
+	return v, ok, nil
 }
 
-func (m *memKV) ListKeys(context.Context, ...jetstream.WatchOpt) (jetstream.KeyLister, error) {
+func (m *memKV) Keys(ctx context.Context) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.listErr != nil {
 		return nil, m.listErr
 	}
-	ch := make(chan string, len(m.vals))
+	keys := make([]string, 0, len(m.vals))
 	for k := range m.vals {
-		ch <- k
+		keys = append(keys, k)
 	}
-	close(ch)
-	return lister{ch}, nil
+	return keys, nil
 }
 
 func (m *memKV) delete(key string) {
@@ -61,24 +61,6 @@ func (m *memKV) delete(key string) {
 	defer m.mu.Unlock()
 	delete(m.vals, key)
 }
-
-type lister struct{ ch chan string }
-
-func (l lister) Keys() <-chan string { return l.ch }
-func (lister) Stop() error           { return nil }
-
-type entry struct {
-	key   string
-	value []byte
-}
-
-func (e entry) Bucket() string                  { return "SCRAPER_RUNS" }
-func (e entry) Key() string                     { return e.key }
-func (e entry) Value() []byte                   { return e.value }
-func (e entry) Revision() uint64                { return 1 }
-func (e entry) Created() time.Time              { return time.Time{} }
-func (e entry) Delta() uint64                   { return 0 }
-func (e entry) Operation() jetstream.KeyValueOp { return jetstream.KeyValuePut }
 
 var t0 = time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
 
@@ -389,5 +371,42 @@ func TestLastSuccessAfterTwoDaysOfFailures(t *testing.T) {
 	}
 	if sum.Latest[0].LastSuccessAt == nil {
 		t.Error("LastSuccessAt = nil, want the success 60 runs back")
+	}
+}
+
+// The SQL store is a drop-in for the Reader and for Write, and forgets
+// records older than the retention.
+func TestSQLStoreWritesAndReadsAndExpires(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+t.TempDir()+"/r.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE scraper_runs (key TEXT PRIMARY KEY, value TEXT NOT NULL, created_at TEXT NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	now := t0
+	store := SQLStore{DB: db, Now: func() time.Time { return now }}
+
+	old := rec(1, 0, 3, "")
+	if err := Write(context.Background(), store, []Record{old}); err != nil {
+		t.Fatal(err)
+	}
+	now = t0.Add(9 * 24 * time.Hour) // past the retention of the first record
+	fresh := rec(1, 9*24, 2, "")
+	if err := Write(context.Background(), store, []Record{fresh}); err != nil {
+		t.Fatal(err)
+	}
+
+	keys, err := store.Keys(context.Background())
+	if err != nil || len(keys) != 1 || keys[0] != Key(fresh) {
+		t.Fatalf("keys = %v, %v; want only the fresh record", keys, err)
+	}
+	if _, ok, _ := store.Get(context.Background(), Key(old)); ok {
+		t.Error("the expired record is still readable")
+	}
+	sum, err := NewReader(store).Summary(context.Background(), 10)
+	if err != nil || len(sum.Latest) != 1 || sum.Latest[0].UpcomingSessions != 2 {
+		t.Errorf("summary = %+v, %v", sum, err)
 	}
 }

@@ -1,5 +1,4 @@
-# Local development stack. Mirrors deploy/k8s: NATS and web-ui-api with its
-# SQLite database on a volume, so the stack runs with no external cloud
+# Local development stack: web-ui-api with its SQLite database on a volume, so the stack runs with no external cloud
 # dependencies besides Telegram and the SMTP relay.
 #
 # Usage:
@@ -8,29 +7,11 @@
 #   docker compose exec web-ui-api /app/web-ui-api --scrape-once   # scrape now (it also runs every hour)
 
 services:
-  nats:
-    # Floating 2.x tag on purpose; Dependabot (docker, /) proposes pinned bumps.
-    image: nats:2-alpine
-    command: ["-js", "-sd", "/data", "-m", "8222"]
-    ports:
-      - "127.0.0.1:4222:4222"
-    volumes:
-      - nats-data:/data
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8222/healthz"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-
   web-ui-api:
     build:
       context: .
       dockerfile: cmd/web-ui-api/Dockerfile
-    depends_on:
-      nats:
-        condition: service_healthy
     environment:
-      NATS_URL: nats://nats:4222
       # The SQLite database, on the web-data volume.
       DATABASE_PATH: /data/ticket-scanner.db
       # A fresh local database; without it an empty file with nothing to import is refused.
@@ -63,5 +44,4 @@ services:
       - "127.0.0.1:8080:8080"
 
 volumes:
-  nats-data:
   web-data:
