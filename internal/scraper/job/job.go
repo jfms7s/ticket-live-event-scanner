@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
 	"github.com/jfms7s/ticket-live-event-scanner/internal/runs"
@@ -55,7 +54,7 @@ func Scrape(ctx context.Context, d Deps) (err error) {
 		if runsKV == nil || !shouldRecord(err) {
 			return
 		}
-		records := discovery.RunRecords(cfg.HubPages, hubs, start, time.Now(), err, redactor(cfg))
+		records := discovery.RunRecords(cfg.HubPages, hubs, start, time.Now(), err)
 		wctx, cancel := context.WithTimeout(context.Background(), recordTimeout)
 		defer cancel()
 		if werr := runs.Write(wctx, runsKV, records); werr != nil {
@@ -129,17 +128,4 @@ func Digest(ctx context.Context, d Deps) error {
 		return fmt.Errorf("ensure runs bucket: %w", err)
 	}
 	return digest.Send(ctx, d.DB, runs.NewReader(runsKV), d.JS, time.Now())
-}
-
-// redactor returns a function that removes the database auth token from
-// error text before it goes into the run log, which the dashboard serves
-// unauthenticated. The driver's errors are not known to echo the DSN, but
-// the record must not depend on that.
-func redactor(cfg config.Config) func(string) string {
-	return func(s string) string {
-		if cfg.TursoAuthToken == "" {
-			return s
-		}
-		return strings.ReplaceAll(s, cfg.TursoAuthToken, "REDACTED")
-	}
 }

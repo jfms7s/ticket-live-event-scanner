@@ -300,18 +300,6 @@ func containsLine(schema, def string) bool {
 	return false
 }
 
-// TestConnectAddsAuthToken checks the token becomes the driver's
-// authToken query parameter. sql.Open is lazy, so nothing is dialled.
-func TestConnectAddsAuthToken(t *testing.T) {
-	for _, url := range []string{"libsql://db.example.invalid", "libsql://db.example.invalid?tls=1"} {
-		db, err := Connect(url, "tok")
-		if err != nil {
-			t.Fatalf("Connect(%q): %v", url, err)
-		}
-		db.Close()
-	}
-}
-
 // TestMigrateAddsHubSlugColumn checks that a database from before hubs were
 // recorded gains a nullable events.hub_slug, leaving existing rows NULL.
 func TestMigrateAddsHubSlugColumn(t *testing.T) {

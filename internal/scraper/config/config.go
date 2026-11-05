@@ -7,11 +7,9 @@ import (
 
 // Config holds the scraper's runtime configuration.
 type Config struct {
-	NatsURL          string
-	TursoDatabaseURL string
-	TursoAuthToken   string
-	UserAgent        string
-	RequestDelayMS   int
+	NatsURL        string
+	UserAgent      string
+	RequestDelayMS int
 	// HubPages is TICKETLINE_HUB_PAGES, which only seeds the watches table
 	// (see package watch); the run scrapes watch.Resolve's result.
 	HubPages []string
@@ -32,11 +30,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	return Config{
-		NatsURL:          envconfig.NatsURL(),
-		TursoDatabaseURL: envconfig.String("TURSO_DATABASE_URL", ""),
-		TursoAuthToken:   envconfig.String("TURSO_AUTH_TOKEN", ""),
-		UserAgent:        envconfig.String("USER_AGENT", "ticket-live-event-scanner/0.1 (personal project; contact: jfms7s@gmail.com)"),
-		RequestDelayMS:   delay,
-		HubPages:         hubPagesFromEnv("TICKETLINE_HUB_PAGES", defaultHubPages),
+		NatsURL:        envconfig.NatsURL(),
+		UserAgent:      envconfig.String("USER_AGENT", "ticket-live-event-scanner/0.1 (personal project; contact: jfms7s@gmail.com)"),
+		RequestDelayMS: delay,
+		HubPages:       hubPagesFromEnv("TICKETLINE_HUB_PAGES", defaultHubPages),
 	}, nil
 }

@@ -16,9 +16,8 @@ const maxErrorLen = 500
 // RunRecords turns a run's per-hub stats into run records, one for every
 // configured hub. A hub the run never reached (it failed or was cancelled
 // before getting there) gets runErr as its error, so every record of the
-// newest run says something about every hub. redact scrubs secrets from
-// error text before it is stored.
-func RunRecords(hubPages []string, hubs []HubStats, start, finish time.Time, runErr error, redact func(string) string) []runs.Record {
+// newest run says something about every hub.
+func RunRecords(hubPages []string, hubs []HubStats, start, finish time.Time, runErr error) []runs.Record {
 	reached := make(map[string]HubStats, len(hubs))
 	for _, h := range hubs {
 		reached[h.Slug] = h
@@ -53,7 +52,7 @@ func RunRecords(hubPages []string, hubs []HubStats, start, finish time.Time, run
 			NewEvents:      h.NewEvents,
 		}
 		if h.Err != nil {
-			r.Error = truncate(redact(h.Err.Error()), maxErrorLen)
+			r.Error = truncate(h.Err.Error(), maxErrorLen)
 		}
 		records = append(records, r)
 	}

@@ -102,10 +102,9 @@ func TestRunRecords(t *testing.T) {
 	hubs := []HubStats{
 		{Slug: "maia-98164", ID: 98164, SessionsSeen: 5, FutureSessions: 3, NewEvents: 1},
 	}
-	runErr := errors.New("discovery failed: context deadline exceeded token=s3cret")
-	redact := func(s string) string { return strings.ReplaceAll(s, "s3cret", "REDACTED") }
+	runErr := errors.New("discovery failed: context deadline exceeded")
 
-	recs := RunRecords([]string{"maia-98164", "aveiro-98167"}, hubs, start, finish, runErr, redact)
+	recs := RunRecords([]string{"maia-98164", "aveiro-98167"}, hubs, start, finish, runErr)
 	if len(recs) != 2 {
 		t.Fatalf("RunRecords = %+v, want one per configured hub", recs)
 	}
@@ -116,15 +115,15 @@ func TestRunRecords(t *testing.T) {
 	if !aveiro.Failed() || aveiro.HubID != 98167 {
 		t.Errorf("aveiro = %+v, want hub 98167 with the run's error (never reached)", aveiro)
 	}
-	if strings.Contains(aveiro.Error, "s3cret") || !strings.Contains(aveiro.Error, "REDACTED") {
-		t.Errorf("aveiro error %q not redacted", aveiro.Error)
+	if !strings.Contains(aveiro.Error, "context deadline exceeded") {
+		t.Errorf("aveiro error %q lost the run's error", aveiro.Error)
 	}
 	if maia.RunID != aveiro.RunID || !maia.StartedAt.Equal(start) || !maia.FinishedAt.Equal(finish) {
 		t.Errorf("records don't share the run: %+v / %+v", maia, aveiro)
 	}
 
 	// A run that failed before discovery records every hub with its error.
-	recs = RunRecords([]string{"maia-98164"}, nil, start, finish, errors.New("load known event IDs: nats: timeout"), redact)
+	recs = RunRecords([]string{"maia-98164"}, nil, start, finish, errors.New("load known event IDs: nats: timeout"))
 	if len(recs) != 1 || !strings.Contains(recs[0].Error, "load known event IDs") {
 		t.Errorf("RunRecords before discovery = %+v", recs)
 	}
@@ -132,7 +131,7 @@ func TestRunRecords(t *testing.T) {
 
 func TestRunRecordsTruncatesLongErrors(t *testing.T) {
 	long := errors.New(strings.Repeat("é", 400))
-	recs := RunRecords([]string{"x-1"}, []HubStats{{Slug: "x-1", ID: 1, Err: long}}, time.Now(), time.Now(), nil, func(s string) string { return s })
+	recs := RunRecords([]string{"x-1"}, []HubStats{{Slug: "x-1", ID: 1, Err: long}}, time.Now(), time.Now(), nil)
 	if n := len(recs[0].Error); n > maxErrorLen+len("…") {
 		t.Errorf("error is %d bytes, want at most %d", n, maxErrorLen+len("…"))
 	}
@@ -143,7 +142,7 @@ func TestRunRecordsTruncatesLongErrors(t *testing.T) {
 
 func TestRunRecordsKeepsOneRecordPerHubID(t *testing.T) {
 	recs := RunRecords([]string{"bad-a", "maia-1", "bad-b", "maia-1"}, nil, time.Now(), time.Now(),
-		errors.New("boom"), func(s string) string { return s })
+		errors.New("boom"))
 	if len(recs) != 2 || recs[0].HubSlug != "bad-a" || recs[1].HubID != 1 {
 		t.Errorf("RunRecords = %+v, want bad-a (id 0) and maia-1 once each", recs)
 	}

@@ -1,4 +1,4 @@
-// Package store holds the Turso/libSQL connection helper and schema
+// Package store holds the SQLite database opener and the schema
 // shared by every service that talks to the database (web-ui-api writes
 // it, scraper reads known event IDs from it), per
 // the project design doc (kept outside this repo), §7.
@@ -9,8 +9,6 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
-
-	_ "github.com/tursodatabase/libsql-client-go/libsql"
 )
 
 // Schema is applied with CREATE TABLE IF NOT EXISTS, so it is safe to run
@@ -19,9 +17,7 @@ import (
 // Date and time columns are TEXT, not DATE/TIMESTAMP: the code writes and
 // reads them as text, and a DATE-typed column makes modernc.org/sqlite
 // parse them into time.Time on the way out (a different string than was
-// stored). sqld, which production still used when this was written, hands
-// text back for either, so an existing sqld database keeps its old column
-// types and behaves the same.
+// stored).
 const Schema = `
 CREATE TABLE IF NOT EXISTS events (
     id            INTEGER PRIMARY KEY,
@@ -62,35 +58,10 @@ CREATE TABLE IF NOT EXISTS watches (
     added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- Facts about this database file, e.g. that it was filled from sqld (import.go).
-CREATE TABLE IF NOT EXISTS meta (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
 
 CREATE INDEX IF NOT EXISTS idx_notifications_event_id ON notifications(event_id);
 CREATE INDEX IF NOT EXISTS idx_events_discovered_at ON events(discovered_at);
 `
-
-// Connect opens a libSQL connection to Turso. dbURL is expected in the
-// form "libsql://<db>-<org>.turso.io"; authToken is appended as the
-// driver's ?authToken query parameter.
-func Connect(dbURL, authToken string) (*sql.DB, error) {
-	dsn := dbURL
-	if authToken != "" {
-		sep := "?"
-		if strings.Contains(dbURL, "?") {
-			sep = "&"
-		}
-		dsn = fmt.Sprintf("%s%sauthToken=%s", dbURL, sep, authToken)
-	}
-
-	db, err := sql.Open("libsql", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("open turso connection: connection failed (check TURSO_DATABASE_URL/TURSO_AUTH_TOKEN)")
-	}
-	return db, nil
-}
 
 // addedEventColumns are events columns added after the table already
 // existed in production, where CREATE TABLE IF NOT EXISTS in Schema is a
