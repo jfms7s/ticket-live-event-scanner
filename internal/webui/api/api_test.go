@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nats-io/nats.go/jetstream"
 	_ "modernc.org/sqlite"
 )
 
@@ -39,34 +38,13 @@ func setupTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
-// MockJetStream is a minimal mock that records published messages.
-type MockJetStream struct {
-	publishedMessages []publishedMessage
-	// publishErr, when set, is returned by every Publish (nothing is recorded).
-	publishErr error
-}
-
-type publishedMessage struct {
-	subject string
-	data    []byte
-}
-
-func NewMockJetStream() *MockJetStream {
-	return &MockJetStream{
-		publishedMessages: []publishedMessage{},
+// queued counts the notifications queued for a channel, whatever their
+// state.
+func queued(t *testing.T, db *sql.DB, channel string) int {
+	t.Helper()
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM notifications WHERE channel = ?`, channel).Scan(&n); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func (m *MockJetStream) Publish(ctx context.Context, subject string, data []byte, opts ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
-	// opts are jetstream.PublishOpt values; in a real test we'd extract msgID,
-	// but for this test we just verify the message was published
-	_ = opts
-	if m.publishErr != nil {
-		return nil, m.publishErr
-	}
-	m.publishedMessages = append(m.publishedMessages, publishedMessage{
-		subject: subject,
-		data:    data,
-	})
-	return &jetstream.PubAck{}, nil
+	return n
 }

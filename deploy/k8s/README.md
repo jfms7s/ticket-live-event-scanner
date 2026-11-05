@@ -16,9 +16,9 @@ This directory contains Kubernetes manifests to deploy the ticket-scanner servic
 - **web-ui-api.yaml**: Web API backend (Deployment + Service)
   - Go JSON API on port 8080 (exposed via Service on port 80)
   - Liveness/readiness probes on `GET /healthz`
-  - Consumes both NATS streams (`EVENTS`, `NOTIFICATIONS`), materializes into its SQLite database (`/data/ticket-scanner.db` on the `web-ui-api-data` volume)
-  - Also runs the scraper (a scrape at start-up and then every hour, pulling ticketline.pt and publishing to NATS `events.discovered`) and the weekly digest (Sunday 19:00 Lisbon); `SCRAPER_ENABLED=false` turns both off. Scrape by hand: `kubectl exec -n ticket-scanner deploy/web-ui-api -- /app/web-ui-api --scrape-once`
-  - Also delivers the notifications: Telegram (each new session, the weekly digest) and email calendar invites, from the `telegram-bot-token` and `smtp-credentials` Secrets. A channel whose Secret is missing is disabled, not fatal, and shows as 0 in `ticket_scanner_notifier_enabled` on `/metrics`
+  - Keeps its state in a SQLite database (`/data/ticket-scanner.db` on the `web-ui-api-data` volume) and queues every notification there (the outbox, table `notifications`); there is no message broker in use
+  - Also runs the scraper (a scrape at start-up and then every hour, pulling ticketline.pt and queueing a notification for each new session) and the weekly digest (Sunday 19:00 Lisbon); `SCRAPER_ENABLED=false` turns both off. Scrape by hand: `kubectl exec -n ticket-scanner deploy/web-ui-api -- /app/web-ui-api --scrape-once`
+  - Also delivers the queued notifications, with retries (1 m, 5 m, 30 m, 2 h, 12 h, then failed; the dashboard's Retry queues a fresh one): Telegram (each new session, the weekly digest) and email calendar invites, from the `telegram-bot-token` and `smtp-credentials` Secrets. A channel whose Secret is missing is disabled, not fatal, and shows as 0 in `ticket_scanner_notifier_enabled` on `/metrics`
   - Also serves the dashboard (the React build is embedded in the binary) at `/`, same origin as `/api`
   - These manifests define no Ingress
 - **networkpolicy.yaml**: Ingress NetworkPolicies (egress is not restricted)
@@ -134,15 +134,33 @@ the same durable consumers with web-ui-api and split the deliveries:
 kubectl delete deployment telegram-notifier email-notifier -n ticket-scanner --ignore-not-found
 ```
 
-## NATS Streams
+## Moving from the NATS release to the outbox (app v0.14.0)
 
-Each Go service calls `internal/streams.EnsureStreams()` on startup to idempotently create NATS JetStream streams and consumers. You do not need to manually configure NATS streams — they will be created automatically on first run.
+Earlier releases moved notifications through NATS JetStream. From v0.14.0 the notification is a row in the database and nothing uses NATS (`nats.yaml` stays in this tree only so a rollback finds it). A message that was published but not yet delivered, or delivered and not yet acknowledged, when the old pod stops would be lost, and one already sent whose result was still in a stream would be sent again, so move only when nothing is in flight:
+
+```bash
+# Run it just before the rollout, away from the top of the hour (the scrape runs at :00),
+# with the new image. NATS_URL and, if the broker has one, NATS_TOKEN come from the old Deployment.
+kubectl -n ticket-scanner run drain-check --rm -i --restart=Never \
+  --image=ghcr.io/jfms7s/ticket-live-event-scanner-web-ui-api:<v0.14.0> \
+  --env NATS_URL=nats://nats:4222 --command -- /app/web-ui-api --nats-drain-check
+```
+
+It prints each durable consumer's `pending` and `ack_pending` and exits 0 only when all are zero ("Drained"). If not, wait and run it again. Roll out straight after.
+
+**Rollback.** The earlier release (and its chart) can be pinned back, but notifications queued since the move live only in the database and the old release does not send them. List them, and resend them from the dashboard's Retry (Telegram) or by unticking and ticking the purchase (invite):
+
+```sql
+SELECT id, event_id, channel, status, attempts, error FROM notifications WHERE status = 'pending' AND next_attempt_at IS NOT NULL;
+```
+
+Rows that were already `sent` or `failed` need nothing.
 
 ## Architecture Notes
 
 - **Cluster-internal only**: In these manifests the web UI services (the API, which also serves the dashboard) are ClusterIP services with no Ingress. Access them from within the cluster (e.g., via port-forward for local testing).
 - **Scraper in the API process**: web-ui-api runs the scraper on a ticker (hourly, plus once at start-up). It queries the database to determine known event IDs and publishes only new discoveries.
-- **Single NATS replica**: NATS is deployed as a single-replica StatefulSet for simplicity. It is self-hosted in-cluster per design (not a managed service).
+- **No broker in use**: NATS is still deployed (idle) for one release so a rollback finds it; a later release removes it.
 - **Database on a volume**: web-ui-api owns one SQLite file (WAL) on a ReadWriteOnce volume, so it runs as a single replica with `Recreate`.
 
 ## Upgrading from the scraper CronJobs

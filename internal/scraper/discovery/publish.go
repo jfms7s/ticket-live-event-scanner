@@ -2,21 +2,17 @@ package discovery
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
-	"strconv"
 	"strings"
 
 	"github.com/jfms7s/ticket-live-event-scanner/internal/event"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/scraper/parse"
-	"github.com/jfms7s/ticket-live-event-scanner/internal/streams"
-	"github.com/nats-io/nats.go/jetstream"
 )
 
 // fetchAndPublishEvent fetches an event's detail page, parses it, and
-// publishes the resulting event.Discovered message to NATS JetStream.
+// queues the resulting notification (storing the event with it).
 func (s *Scraper) fetchAndPublishEvent(ctx context.Context, basicEvent event.Discovered, hubSlug string) error {
 	// Construct full absolute URL for detail page
 	detailURL := fmt.Sprintf("%s/evento/%s", s.baseURL, basicEvent.Slug)
@@ -71,38 +67,25 @@ func (s *Scraper) fetchAndPublishEvent(ctx context.Context, basicEvent event.Dis
 		return fmt.Errorf("%w: event %d missing required field: slug", errSkip, basicEvent.EventID)
 	}
 
-	// Publish to NATS
-	data, err := json.Marshal(detailEvent)
+	// Store the session and queue its notification in one transaction.
+	// Both exist or neither does: a failure here fails the run and the next
+	// run finds the session unknown and tries again.
+	queued, err := s.queue.EnqueueDiscovered(ctx, detailEvent)
 	if err != nil {
-		return fmt.Errorf("marshal event: %w", err)
+		return fmt.Errorf("queue event %d: %w", basicEvent.EventID, err)
 	}
 
-	ack, err := s.pub.Publish(ctx, streams.EventsSubject, data,
-		jetstream.WithMsgID(strconv.FormatInt(basicEvent.EventID, 10)))
-	if err != nil {
-		return fmt.Errorf("publish event: %w", err)
-	}
-
-	// Mark as known immediately so this run doesn't re-fetch/re-publish it
-	// if the same event ID turns up again later in this same discovery pass
-	// (the same session can be listed on two tracked hub pages in one run).
+	// Known now, so this run doesn't fetch it again if the same session
+	// turns up on another tracked hub page.
 	s.knownIDs[basicEvent.EventID] = true
 
-	if ack != nil && ack.Duplicate {
-		// The stream still remembers this message ID (7-day window), so
-		// nothing was delivered: an earlier run published it but didn't
-		// get to mark it seen.
-		log.Printf("Event %d already on the stream; marking it seen", basicEvent.EventID)
-	} else {
-		s.Stats.EventsPublished++
-		log.Printf("Published event %d: %s", basicEvent.EventID, detailEvent.Title)
+	if !queued {
+		// It already had a notification (another run or process queued it
+		// between this one's start and now); nothing was added.
+		log.Printf("Event %d already queued; not queueing it again", basicEvent.EventID)
+		return nil
 	}
-
-	// Without the mark, the next runs rely on the stream's message-ID
-	// window and on web-ui-api materialising the event, so fail the run
-	// loudly rather than carry on as if all were well.
-	if err := s.seen.Mark(ctx, basicEvent.EventID); err != nil {
-		return fmt.Errorf("event %d published but not marked seen: %w", basicEvent.EventID, err)
-	}
+	s.Stats.EventsPublished++
+	log.Printf("Queued event %d: %s", basicEvent.EventID, detailEvent.Title)
 	return nil
 }

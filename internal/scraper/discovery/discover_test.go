@@ -3,23 +3,20 @@ package discovery
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/jfms7s/ticket-live-event-scanner/internal/event"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/outbox"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/scraper/config"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/store"
-	"github.com/jfms7s/ticket-live-event-scanner/internal/streams"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/webui/repository"
-	"github.com/nats-io/nats.go/jetstream"
-	_ "modernc.org/sqlite"
 )
 
 const hubSlug = "fado-hub-500"
@@ -112,22 +109,25 @@ func (h *hubSite) serve(w http.ResponseWriter, r *http.Request) {
 </div></body></html>`, idStr)
 }
 
-// recordingPublisher records every publish. It applies no message-ID
-// dedup, as if the stream's duplicate window had already passed.
+// recordingPublisher queues through the real outbox and records what it
+// queued. err, when set, makes every enqueue fail.
 type recordingPublisher struct {
+	q         *outbox.Queue
 	published []event.Discovered
+	err       error
 }
 
-func (p *recordingPublisher) Publish(_ context.Context, subject string, data []byte, _ ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
-	if subject != streams.EventsSubject {
-		return nil, fmt.Errorf("unexpected subject %q", subject)
+func newQueue(db *sql.DB) *recordingPublisher { return &recordingPublisher{q: &outbox.Queue{DB: db}} }
+
+func (p *recordingPublisher) EnqueueDiscovered(ctx context.Context, d *event.Discovered) (bool, error) {
+	if p.err != nil {
+		return false, p.err
 	}
-	var d event.Discovered
-	if err := json.Unmarshal(data, &d); err != nil {
-		return nil, err
+	queued, err := p.q.EnqueueDiscovered(ctx, d)
+	if queued {
+		p.published = append(p.published, *d)
 	}
-	p.published = append(p.published, d)
-	return &jetstream.PubAck{Stream: streams.EventsStreamName}, nil
+	return queued, err
 }
 
 func (p *recordingPublisher) count(id int64) int {
@@ -140,94 +140,33 @@ func (p *recordingPublisher) count(id int64) int {
 	return n
 }
 
-// memKV is an in-memory stand-in for the seen KV bucket.
-type memKV struct {
-	mu      sync.Mutex
-	keys    map[string]bool
-	listErr error
-	putErr  error
-}
-
-func newMemKV() *memKV { return &memKV{keys: map[string]bool{}} }
-
-func (m *memKV) Put(_ context.Context, key string, _ []byte) (uint64, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.putErr != nil {
-		return 0, m.putErr
-	}
-	m.keys[key] = true
-	return uint64(len(m.keys)), nil
-}
-
-func (m *memKV) ListKeys(context.Context, ...jetstream.WatchOpt) (jetstream.KeyLister, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.listErr != nil {
-		return nil, m.listErr
-	}
-	ch := make(chan string, len(m.keys))
-	for k := range m.keys {
-		ch <- k
-	}
-	close(ch)
-	return memLister{ch}, nil
-}
-
-type memLister struct{ ch chan string }
-
-func (l memLister) Keys() <-chan string { return l.ch }
-func (memLister) Stop() error           { return nil }
-
-// migratedDB is web-ui-api's database after store.Migrate, with no rows.
+// migratedDB is web-ui-api's database after store.Open, with no rows.
 func migratedDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db := emptyDB(t)
-	if err := store.Migrate(context.Background(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	return db
-}
-
-// emptyDB is a database web-ui-api has never started against: no tables.
-func emptyDB(t *testing.T) *sql.DB {
-	t.Helper()
-	db, err := sql.Open("sqlite", "file:"+t.TempDir()+"/scanner.db")
+	db, err := store.Open(context.Background(), store.Options{Path: filepath.Join(t.TempDir(), "scanner.db"), AllowEmpty: true})
 	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
+		t.Fatalf("open database: %v", err)
 	}
-	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { db.Close() })
 	return db
 }
 
 // run is one scraper process: a fresh Scraper (so nothing in memory carries
-// over), loading the seen set and discovering once.
-func run(t *testing.T, site *hubSite, kv seenKV, db *sql.DB, pub publisher) error {
+// over), loading the known set and discovering once.
+func run(t *testing.T, site *hubSite, db *sql.DB, pub *recordingPublisher) error {
 	t.Helper()
 	cfg := config.Config{UserAgent: "test", HubPages: []string{hubSlug}}
-	s := newScraper(cfg, site.srv.URL, newSeenStore(kv, db), pub)
+	s := newScraper(cfg, site.srv.URL, db, pub)
 	if err := s.LoadKnownIDs(context.Background()); err != nil {
 		return fmt.Errorf("load known IDs: %w", err)
 	}
 	return s.Discover(context.Background())
 }
 
-func mustRun(t *testing.T, site *hubSite, kv seenKV, db *sql.DB, pub publisher) {
+func mustRun(t *testing.T, site *hubSite, db *sql.DB, pub *recordingPublisher) {
 	t.Helper()
-	if err := run(t, site, kv, db, pub); err != nil {
+	if err := run(t, site, db, pub); err != nil {
 		t.Fatalf("run: %v", err)
-	}
-}
-
-// materialise does what web-ui-api's events consumer does with each
-// published message.
-func materialise(t *testing.T, db *sql.DB, pub *recordingPublisher) {
-	t.Helper()
-	for i := range pub.published {
-		if err := repository.UpsertEventAndInsertNotification(context.Background(), db, &pub.published[i], uint64(i+1)); err != nil {
-			t.Fatalf("materialise event %d: %v", pub.published[i].EventID, err)
-		}
 	}
 }
 
@@ -235,57 +174,52 @@ func assertPublishedOnce(t *testing.T, pub *recordingPublisher, ids ...int64) {
 	t.Helper()
 	for _, id := range ids {
 		if n := pub.count(id); n != 1 {
-			t.Errorf("event %d published %d times across runs, want 1", id, n)
+			t.Errorf("event %d queued %d times across runs, want 1", id, n)
 		}
 	}
 	if len(pub.published) != len(ids) {
-		t.Errorf("published %d messages, want %d", len(pub.published), len(ids))
+		t.Errorf("queued %d notifications, want %d", len(pub.published), len(ids))
 	}
 }
 
-// TestDiscoverTwiceWhileWebUIIsDown is the hourly scrape with web-ui-api
-// down (or behind): nothing materialises the events table between runs, so
-// the second run must still know what the first published.
-func TestDiscoverTwiceWhileWebUIIsDown(t *testing.T) {
-	site := newHubSite(t, 101, 102)
-	kv, db, pub := newMemKV(), migratedDB(t), &recordingPublisher{}
+// rowsFor counts the notification rows of an event.
+func rowsFor(t *testing.T, db *sql.DB, id int64) int {
+	t.Helper()
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM notifications WHERE event_id = ?`, id).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
 
-	mustRun(t, site, kv, db, pub)
-	mustRun(t, site, kv, db, pub)
+// TestDiscoverTwiceQueuesEachSessionOnce is two hourly runs over the same
+// hub page: the second finds everything known.
+func TestDiscoverTwiceQueuesEachSessionOnce(t *testing.T) {
+	site := newHubSite(t, 101, 102)
+	db, pub := migratedDB(t), (*recordingPublisher)(nil)
+	pub = newQueue(db)
+
+	mustRun(t, site, db, pub)
+	mustRun(t, site, db, pub)
 
 	assertPublishedOnce(t, pub, 101, 102)
+	if rowsFor(t, db, 101) != 1 || rowsFor(t, db, 102) != 1 {
+		t.Error("a session has more than one notification row")
+	}
 }
 
 // TestDiscoverAfterRemove is the dashboard's Remove between runs: the
 // event is still listed on its hub page and must not be notified again.
 func TestDiscoverAfterRemove(t *testing.T) {
 	site := newHubSite(t, 101, 102)
-	kv, db, pub := newMemKV(), migratedDB(t), &recordingPublisher{}
+	db := migratedDB(t)
+	pub := newQueue(db)
 
-	mustRun(t, site, kv, db, pub)
-	materialise(t, db, pub)
+	mustRun(t, site, db, pub)
 	if err := repository.HideEvent(context.Background(), db, 101); err != nil {
 		t.Fatalf("remove event 101: %v", err)
 	}
-	mustRun(t, site, kv, db, pub)
-
-	assertPublishedOnce(t, pub, 101, 102)
-}
-
-// TestDiscoverSkipsEventsKnownOnlyToTheDatabase is the first run after the
-// seen bucket was introduced (or after it was lost): the bucket is empty,
-// and events already notified, including removed ones, are known only
-// from web-ui-api's events table. They must not be notified again.
-func TestDiscoverSkipsEventsKnownOnlyToTheDatabase(t *testing.T) {
-	site := newHubSite(t, 101, 102)
-	db, pub := migratedDB(t), &recordingPublisher{}
-
-	mustRun(t, site, newMemKV(), db, pub)
-	materialise(t, db, pub)
-	if err := repository.HideEvent(context.Background(), db, 101); err != nil {
-		t.Fatalf("remove event 101: %v", err)
-	}
-	mustRun(t, site, newMemKV(), db, pub)
+	mustRun(t, site, db, pub)
 
 	assertPublishedOnce(t, pub, 101, 102)
 }
@@ -294,100 +228,83 @@ func TestDiscoverSkipsEventsKnownOnlyToTheDatabase(t *testing.T) {
 // bug fails: silently suppressing a genuinely new session.
 func TestDiscoverPublishesNewSessionsOnLaterRuns(t *testing.T) {
 	site := newHubSite(t, 101)
-	kv, db, pub := newMemKV(), migratedDB(t), &recordingPublisher{}
+	db := migratedDB(t)
+	pub := newQueue(db)
 
-	mustRun(t, site, kv, db, pub)
+	mustRun(t, site, db, pub)
 	site.list(101, 103)
-	mustRun(t, site, kv, db, pub)
+	mustRun(t, site, db, pub)
 
 	assertPublishedOnce(t, pub, 101, 103)
 }
 
-// TestDiscoverBeforeWebUIEverStarted runs against a database that has no
-// events table yet (web-ui-api runs Migrate, the scraper doesn't), twice.
-func TestDiscoverBeforeWebUIEverStarted(t *testing.T) {
-	site := newHubSite(t, 101)
-	kv, db, pub := newMemKV(), emptyDB(t), &recordingPublisher{}
-
-	mustRun(t, site, kv, db, pub)
-	mustRun(t, site, kv, db, pub)
-
-	assertPublishedOnce(t, pub, 101)
-}
-
-// TestDiscoverFailsWhenTheSeenBucketCannotBeRead checks that an unreadable
-// bucket stops the run instead of treating every event as new.
-func TestDiscoverFailsWhenTheSeenBucketCannotBeRead(t *testing.T) {
-	site := newHubSite(t, 101)
-	kv, db, pub := newMemKV(), migratedDB(t), &recordingPublisher{}
-	kv.listErr = errors.New("nats: timeout")
-
-	if err := run(t, site, kv, db, pub); err == nil {
-		t.Fatal("run succeeded with an unreadable seen bucket, want an error")
-	}
-	if len(pub.published) != 0 {
-		t.Errorf("published %d messages with an unreadable seen bucket, want 0", len(pub.published))
-	}
-}
-
-// TestDiscoverReportsAFailedMark checks that a publish whose seen mark
-// fails is still counted as published but fails the run, so the error is
-// visible (the stream's 7-day message-ID window still covers the next runs).
-func TestDiscoverReportsAFailedMark(t *testing.T) {
-	site := newHubSite(t, 101)
-	kv, db, pub := newMemKV(), migratedDB(t), &recordingPublisher{}
-	kv.putErr = errors.New("nats: timeout")
-
-	if err := run(t, site, kv, db, pub); err == nil {
-		t.Fatal("run succeeded although marking the event seen failed, want an error")
-	}
-	assertPublishedOnce(t, pub, 101)
-}
-
-func TestSeenStoreKeysAreEventIDs(t *testing.T) {
-	kv := newMemKV()
-	seen := newSeenStore(kv, migratedDB(t))
-	if err := seen.Mark(context.Background(), 98164); err != nil {
+// TestDiscoverSkipsSessionsAlreadyInTheDatabase: a session stored by an
+// earlier release (before the outbox existed) is known and not queued.
+func TestDiscoverSkipsSessionsAlreadyInTheDatabase(t *testing.T) {
+	site := newHubSite(t, 101, 102)
+	db := migratedDB(t)
+	if _, err := db.Exec(`INSERT INTO events (id, slug, title, url, hidden) VALUES (101, 's', 't', 'u', 1)`); err != nil {
 		t.Fatal(err)
 	}
-	if !kv.keys[strconv.FormatInt(98164, 10)] {
-		t.Fatalf("bucket keys = %v, want \"98164\"", kv.keys)
-	}
+	pub := newQueue(db)
 
-	kv.keys["not-a-number"] = true
-	if _, err := seen.Load(context.Background()); err == nil {
-		t.Error("Load accepted a key that is not an event ID, want an error")
+	mustRun(t, site, db, pub)
+
+	assertPublishedOnce(t, pub, 102)
+	if n := site.detailFetches[101]; n != 0 {
+		t.Errorf("known session 101 was fetched %d times, want 0", n)
 	}
 }
 
-// duplicateAckPublisher acks every publish as a stream duplicate, as
-// JetStream does for a message ID it saw within the Duplicates window.
-type duplicateAckPublisher struct{ calls int }
-
-func (p *duplicateAckPublisher) Publish(context.Context, string, []byte, ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
-	p.calls++
-	return &jetstream.PubAck{Stream: streams.EventsStreamName, Duplicate: true}, nil
-}
-
-// TestDiscoverMarksStreamDuplicatesSeen covers a run after one that
-// published but failed to mark: the stream rejects the repeat as a
-// duplicate, which is not a new publish, but the event is now marked seen.
-func TestDiscoverMarksStreamDuplicatesSeen(t *testing.T) {
+// TestDiscoverOverlappingRunsQueueOnce is two processes that both loaded the
+// known set before either queued: the second insert is a no-op, so the
+// session is announced once.
+func TestDiscoverOverlappingRunsQueueOnce(t *testing.T) {
 	site := newHubSite(t, 101)
-	kv, db, pub := newMemKV(), migratedDB(t), &duplicateAckPublisher{}
-
+	db := migratedDB(t)
+	a, b := newQueue(db), newQueue(db)
 	cfg := config.Config{UserAgent: "test", HubPages: []string{hubSlug}}
-	s := newScraper(cfg, site.srv.URL, newSeenStore(kv, db), pub)
-	if err := s.LoadKnownIDs(context.Background()); err != nil {
+	sa, sb := newScraper(cfg, site.srv.URL, db, a), newScraper(cfg, site.srv.URL, db, b)
+	for _, s := range []*Scraper{sa, sb} {
+		if err := s.LoadKnownIDs(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := sa.Discover(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Discover(context.Background()); err != nil {
+	if err := sb.Discover(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if s.Stats.EventsPublished != 0 {
-		t.Errorf("EventsPublished = %d, want 0 for a stream duplicate", s.Stats.EventsPublished)
+
+	if len(a.published)+len(b.published) != 1 || rowsFor(t, db, 101) != 1 {
+		t.Errorf("queued %d + %d, rows %d; want the session queued exactly once", len(a.published), len(b.published), rowsFor(t, db, 101))
 	}
-	if !kv.keys["101"] {
-		t.Error("event 101 not marked seen after a duplicate ack")
+	if sb.Stats.EventsPublished != 0 {
+		t.Errorf("the second run counted %d queued, want 0", sb.Stats.EventsPublished)
 	}
+}
+
+// TestDiscoverFailsWhenQueueingFails: a session whose notification cannot be
+// queued is not stored either, so the next run finds it new and tries again.
+func TestDiscoverFailsWhenQueueingFails(t *testing.T) {
+	site := newHubSite(t, 101)
+	db := migratedDB(t)
+	pub := newQueue(db)
+	if _, err := db.Exec(`CREATE TRIGGER refuse BEFORE INSERT ON notifications BEGIN SELECT RAISE(ABORT, 'disk full'); END`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := run(t, site, db, pub); err == nil {
+		t.Fatal("run succeeded although the notification could not be queued")
+	}
+	var n int
+	db.QueryRow(`SELECT COUNT(*) FROM events`).Scan(&n)
+	if n != 0 {
+		t.Error("the event was stored without its notification (it would never be announced)")
+	}
+
+	db.Exec(`DROP TRIGGER refuse`)
+	mustRun(t, site, db, pub)
+	assertPublishedOnce(t, pub, 101)
 }

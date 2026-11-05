@@ -45,7 +45,12 @@ CREATE TABLE IF NOT EXISTS notifications (
     confirmed_at        TEXT,
     error               TEXT,
     triggered_by        TEXT NOT NULL DEFAULT 'scraper',
-    delivery_seq        INTEGER
+    delivery_seq        INTEGER,
+    channel             TEXT NOT NULL DEFAULT 'telegram',
+    dedup_key           TEXT,
+    attempts            INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at     TEXT,
+    last_attempt_started_at TEXT
 );
 
 -- The hub pages the scraper tracks (package watch). web-ui-api manages the
@@ -58,6 +63,26 @@ CREATE TABLE IF NOT EXISTS watches (
     added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+
+-- Sessions the parser rejected: left alone until until (UTC), then fetched again.
+CREATE TABLE IF NOT EXISTS skipped_sessions (
+    event_id INTEGER PRIMARY KEY,
+    reason   TEXT NOT NULL,
+    until    TEXT NOT NULL
+);
+
+-- The scraper's run log: one row per hub per run, JSON as the runs package writes it.
+CREATE TABLE IF NOT EXISTS scraper_runs (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+-- The weekly digests sent, by ISO week, so one goes out per week.
+CREATE TABLE IF NOT EXISTS digests (
+    week    TEXT PRIMARY KEY,
+    sent_at TEXT NOT NULL
+);
 
 CREATE INDEX IF NOT EXISTS idx_notifications_event_id ON notifications(event_id);
 CREATE INDEX IF NOT EXISTS idx_events_discovered_at ON events(discovered_at);
@@ -86,6 +111,12 @@ var addedNotificationColumns = []string{
 	// delivery_seq is the EVENTS stream sequence of the events.discovered
 	// message a row was made for (NULL on rows from before it existed).
 	"delivery_seq INTEGER",
+	// The outbox (see package outbox): a notification is a queued delivery.
+	"channel TEXT NOT NULL DEFAULT 'telegram'",
+	"dedup_key TEXT",
+	"attempts INTEGER NOT NULL DEFAULT 0",
+	"next_attempt_at TEXT",
+	"last_attempt_started_at TEXT",
 }
 
 // postColumnIndexes reference added columns, so Migrate creates them after
@@ -94,6 +125,8 @@ var addedNotificationColumns = []string{
 // a UNIQUE index, so rows without delivery_seq never conflict.
 const postColumnIndexes = `
 CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_event_delivery_seq ON notifications(event_id, delivery_seq);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_dedup ON notifications(event_id, channel, dedup_key);
+CREATE INDEX IF NOT EXISTS idx_notifications_due ON notifications(next_attempt_at) WHERE status = 'pending';
 `
 
 // addColumn runs ALTER TABLE ... ADD COLUMN, treating "duplicate column

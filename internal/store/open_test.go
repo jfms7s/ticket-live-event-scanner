@@ -106,3 +106,55 @@ func TestSchemaReturnsDatesAsWrittenText(t *testing.T) {
 		t.Errorf("scanned %q and %q, want the stored text", ev, disc)
 	}
 }
+
+// The production database predates the outbox. Migrating it adds the
+// columns without touching a row, and nothing already there becomes due: a
+// row left pending by the earlier release (it was waiting for a result that
+// will never come) must not suddenly be sent.
+func TestMigrateAddsTheOutboxToAnExistingDatabase(t *testing.T) {
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "old.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	mustExec(t, db, `CREATE TABLE events (id INTEGER PRIMARY KEY, slug TEXT NOT NULL, title TEXT NOT NULL, venue TEXT, category TEXT,
+		event_date TEXT, url TEXT NOT NULL, image_url TEXT, discovered_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		purchased BOOLEAN NOT NULL DEFAULT 0, invite_status TEXT, invite_error TEXT, hidden BOOLEAN NOT NULL DEFAULT 0, hub_slug TEXT)`)
+	mustExec(t, db, `CREATE TABLE notifications (id INTEGER PRIMARY KEY AUTOINCREMENT, event_id INTEGER NOT NULL REFERENCES events(id),
+		status TEXT NOT NULL CHECK (status IN ('pending','sent','failed')), telegram_message_id TEXT,
+		attempted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, confirmed_at TEXT, error TEXT,
+		triggered_by TEXT NOT NULL DEFAULT 'scraper', delivery_seq INTEGER)`)
+	mustExec(t, db, `INSERT INTO events (id, slug, title, url) VALUES (1, 'a', 'A', 'u'), (2, 'b', 'B', 'u')`)
+	mustExec(t, db, `INSERT INTO notifications (event_id, status, telegram_message_id) VALUES (1, 'sent', '77'), (2, 'pending', NULL)`)
+
+	for i := 0; i < 2; i++ { // twice: Migrate is safe to repeat
+		if err := Migrate(ctx, db); err != nil {
+			t.Fatalf("Migrate run %d: %v", i+1, err)
+		}
+	}
+
+	for q, want := range map[string]string{
+		`SELECT COUNT(*) FROM notifications`:                                        "2",
+		`SELECT channel FROM notifications WHERE event_id = 2`:                      "telegram",
+		`SELECT attempts FROM notifications WHERE event_id = 2`:                     "0",
+		`SELECT next_attempt_at FROM notifications WHERE event_id = 2`:              "<NULL>",
+		`SELECT status FROM notifications WHERE event_id = 2`:                       "pending",
+		`SELECT telegram_message_id FROM notifications WHERE event_id = 1`:          "77",
+		`SELECT COUNT(*) FROM notifications WHERE next_attempt_at IS NOT NULL`:      "0",
+		`SELECT COUNT(*) FROM sqlite_master WHERE name = 'idx_notifications_dedup'`: "1",
+	} {
+		if got := scalar(t, db, q); got != want {
+			t.Errorf("%s = %q, want %q", q, got, want)
+		}
+	}
+	// Rows from before the outbox have no dedup key, so they never collide.
+	mustExec(t, db, `INSERT INTO notifications (event_id, status) VALUES (1, 'sent')`)
+	// New ones with a key are unique per (event, channel, key).
+	mustExec(t, db, `INSERT INTO notifications (event_id, status, channel, dedup_key) VALUES (1, 'pending', 'telegram', 'k')`)
+	if _, err := db.Exec(`INSERT INTO notifications (event_id, status, channel, dedup_key) VALUES (1, 'pending', 'telegram', 'k')`); err == nil {
+		t.Error("the same (event, channel, dedup key) was accepted twice")
+	}
+	mustExec(t, db, `INSERT INTO notifications (event_id, status, channel, dedup_key) VALUES (1, 'pending', 'email', 'k')`)
+}

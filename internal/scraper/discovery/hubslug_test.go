@@ -7,9 +7,10 @@ import "testing"
 // group events by hub.
 func TestDiscoverStampsTheHubOnEachPublishedSession(t *testing.T) {
 	site := newHubSite(t, 101, 102)
-	kv, db, pub := newMemKV(), migratedDB(t), &recordingPublisher{}
+	db := migratedDB(t)
+	pub := newQueue(db)
 
-	mustRun(t, site, kv, db, pub)
+	mustRun(t, site, db, pub)
 
 	if len(pub.published) != 2 {
 		t.Fatalf("published %d messages, want 2", len(pub.published))

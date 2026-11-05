@@ -1,7 +1,6 @@
 // Package discovery orchestrates the scraper's end-to-end run: loading
-// the set of already-seen event IDs, fetching tracked hub pages, parsing
-// new sessions off them, and publishing newly discovered events to NATS
-// JetStream.
+// the set of already-known event IDs, fetching tracked hub pages, parsing
+// new sessions off them, and queueing a notification for each new one.
 package discovery
 
 import (
@@ -9,9 +8,9 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/jfms7s/ticket-live-event-scanner/internal/event"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/scraper/config"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/scraper/fetch"
-	"github.com/nats-io/nats.go/jetstream"
 )
 
 // baseURL is the only host the scraper is allowed to fetch from.
@@ -50,29 +49,21 @@ type HubStats struct {
 	Err error
 }
 
-// publisher is the part of jetstream.JetStream the scraper uses.
-type publisher interface {
-	Publish(ctx context.Context, subject string, payload []byte, opts ...jetstream.PublishOpt) (*jetstream.PubAck, error)
+// enqueuer stores a discovered session and queues its notification in one
+// transaction (see package outbox). It reports whether a notification was
+// queued: false means the session already had one.
+type enqueuer interface {
+	EnqueueDiscovered(ctx context.Context, d *event.Discovered) (bool, error)
 }
 
-// seenStore holds the IDs of events the scraper has already published, so
-// a later run doesn't publish them again.
-type seenStore interface {
-	// Load returns every seen event ID.
-	Load(ctx context.Context) (map[int64]bool, error)
-	// Mark records id as seen. It is called right after a successful
-	// publish.
-	Mark(ctx context.Context, id int64) error
-}
-
-// Scraper discovers new events from the configured hub pages and publishes
-// them to NATS JetStream.
+// Scraper discovers new events from the configured hub pages and queues
+// their notifications.
 type Scraper struct {
 	cfg      config.Config
 	baseURL  string
 	fetcher  *fetch.Fetcher
-	seen     seenStore
-	pub      publisher
+	db       *sql.DB
+	queue    enqueuer
 	knownIDs map[int64]bool
 	skipped  skipStore
 	skipIDs  map[int64]bool
@@ -81,29 +72,24 @@ type Scraper struct {
 	Stats Stats
 }
 
-// New constructs a Scraper that publishes through js and keeps its seen
-// set in the seen KV bucket (see streams.EnsureSeenBucket), also reading
-// the IDs already in web-ui-api's events table from db.
-//
-// skipped is the skipped bucket (see streams.EnsureSkippedBucket): sessions
-// the parser rejected, which later runs leave alone until the key expires.
-func New(cfg config.Config, db *sql.DB, js jetstream.JetStream, seen, skipped jetstream.KeyValue) *Scraper {
-	s := newScraper(cfg, baseURL, newSeenStore(seen, db), js)
-	s.skipped = newSkipStore(skipped)
-	return s
+// New constructs a Scraper that queues what it finds through q and reads
+// the sessions it already knows (the events table, hidden ones included) and
+// the ones the parser rejected recently (skipped_sessions) from db.
+func New(cfg config.Config, db *sql.DB, q enqueuer) *Scraper {
+	return newScraper(cfg, baseURL, db, q)
 }
 
 // newScraper builds a Scraper that fetches from site (baseURL in
 // production, an httptest server in tests).
-func newScraper(cfg config.Config, site string, seen seenStore, pub publisher) *Scraper {
+func newScraper(cfg config.Config, site string, db *sql.DB, q enqueuer) *Scraper {
 	return &Scraper{
 		cfg:      cfg,
 		baseURL:  site,
 		fetcher:  fetch.New(cfg.UserAgent, httpTimeout),
-		seen:     seen,
-		pub:      pub,
+		db:       db,
+		queue:    q,
 		knownIDs: make(map[int64]bool),
-		skipped:  noSkipStore{},
+		skipped:  newSkipStore(db),
 		skipIDs:  make(map[int64]bool),
 		now:      time.Now,
 	}

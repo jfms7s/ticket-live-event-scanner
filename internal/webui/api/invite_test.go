@@ -2,7 +2,7 @@ package api
 
 import (
 	"encoding/json"
-	"errors"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/outbox"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -21,7 +21,8 @@ func insertPlainEvent(t *testing.T, app *App, id string) {
 	}
 }
 
-func patchPurchased(t *testing.T, server *httptest.Server, id, body string) {
+// patchPurchasedResp sends the PATCH and returns the response, body closed.
+func patchPurchasedResp(t *testing.T, server *httptest.Server, id, body string) *http.Response {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodPatch, server.URL+"/api/events/"+id+"/purchased", strings.NewReader(body))
 	if err != nil {
@@ -32,6 +33,12 @@ func patchPurchased(t *testing.T, server *httptest.Server, id, body string) {
 		t.Fatalf("PATCH: %v", err)
 	}
 	resp.Body.Close()
+	return resp
+}
+
+func patchPurchased(t *testing.T, server *httptest.Server, id, body string) {
+	t.Helper()
+	resp := patchPurchasedResp(t, server, id, body)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("PATCH status = %d, want 200", resp.StatusCode)
 	}
@@ -54,7 +61,7 @@ func getInvite(t *testing.T, server *httptest.Server, id string) (status, errMsg
 func TestSetPurchasedMarksInvitePending(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
-	app := &App{db: db, js: NewMockJetStream()}
+	app := &App{db: db, queue: &outbox.Queue{DB: db}}
 	server := httptest.NewServer(app.NewMux())
 	defer server.Close()
 	insertPlainEvent(t, app, "5")
@@ -71,26 +78,32 @@ func TestSetPurchasedMarksInvitePending(t *testing.T) {
 	}
 }
 
-// If the invite request never reaches NATS, no result will ever arrive,
-// so the invite is marked failed rather than left pending forever.
-func TestSetPurchasedPublishFailureMarksInviteFailed(t *testing.T) {
+// The flag and its invite are written together: if the invite cannot be
+// queued, the event is not marked purchased (it would otherwise show an
+// invite that will never be sent).
+func TestSetPurchasedIsAtomicWithItsInvite(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
-	mockJS := NewMockJetStream()
-	mockJS.publishErr = errors.New("nats: no responders")
-	app := &App{db: db, js: mockJS}
+	app := &App{db: db, queue: &outbox.Queue{DB: db}}
 	server := httptest.NewServer(app.NewMux())
 	defer server.Close()
 	insertPlainEvent(t, app, "6")
-
-	patchPurchased(t, server, "6", `{"purchased":true}`)
-
-	status, errMsg := getInvite(t, server, "6")
-	if status == nil || *status != "failed" {
-		t.Fatalf("invite_status = %v, want failed", status)
+	if _, err := db.Exec(`CREATE TRIGGER refuse_invite BEFORE INSERT ON notifications BEGIN SELECT RAISE(ABORT, 'disk full'); END`); err != nil {
+		t.Fatal(err)
 	}
-	if errMsg == nil || !strings.Contains(*errMsg, "nats: no responders") {
-		t.Fatalf("invite_error = %v, want it to carry the publish error", errMsg)
+
+	resp := patchPurchasedResp(t, server, "6", `{"purchased":true}`)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", resp.StatusCode)
+	}
+	status, _ := getInvite(t, server, "6")
+	if status != nil {
+		t.Fatalf("invite_status = %q after a failed purchase, want null", *status)
+	}
+	var purchased bool
+	db.QueryRow(`SELECT purchased FROM events WHERE id = 6`).Scan(&purchased)
+	if purchased {
+		t.Error("the event was marked purchased although its invite could not be queued")
 	}
 }
 
@@ -99,8 +112,7 @@ func TestSetPurchasedPublishFailureMarksInviteFailed(t *testing.T) {
 func TestSetPurchasedTwicePublishesOnce(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
-	mockJS := NewMockJetStream()
-	app := &App{db: db, js: mockJS}
+	app := &App{db: db, queue: &outbox.Queue{DB: db}}
 	server := httptest.NewServer(app.NewMux())
 	defer server.Close()
 	insertPlainEvent(t, app, "7")
@@ -108,7 +120,7 @@ func TestSetPurchasedTwicePublishesOnce(t *testing.T) {
 	patchPurchased(t, server, "7", `{"purchased":true}`)
 	patchPurchased(t, server, "7", `{"purchased":true}`)
 
-	if n := len(mockJS.publishedMessages); n != 1 {
+	if n := queued(t, db, "email"); n != 1 {
 		t.Fatalf("published %d purchased messages, want 1", n)
 	}
 }
@@ -118,8 +130,7 @@ func TestSetPurchasedTwicePublishesOnce(t *testing.T) {
 func TestSetPurchasedAgainAfterUntickPublishesAgain(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
-	mockJS := NewMockJetStream()
-	app := &App{db: db, js: mockJS}
+	app := &App{db: db, queue: &outbox.Queue{DB: db}}
 	server := httptest.NewServer(app.NewMux())
 	defer server.Close()
 	insertPlainEvent(t, app, "8")
@@ -131,7 +142,7 @@ func TestSetPurchasedAgainAfterUntickPublishesAgain(t *testing.T) {
 	patchPurchased(t, server, "8", `{"purchased":false}`)
 	patchPurchased(t, server, "8", `{"purchased":true}`)
 
-	if n := len(mockJS.publishedMessages); n != 2 {
+	if n := queued(t, db, "email"); n != 2 {
 		t.Fatalf("published %d purchased messages, want 2", n)
 	}
 	status, errMsg := getInvite(t, server, "8")
@@ -144,8 +155,7 @@ func TestSetPurchasedAgainAfterUntickPublishesAgain(t *testing.T) {
 func TestSetNotPurchasedDoesNotPublish(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
-	mockJS := NewMockJetStream()
-	app := &App{db: db, js: mockJS}
+	app := &App{db: db, queue: &outbox.Queue{DB: db}}
 	server := httptest.NewServer(app.NewMux())
 	defer server.Close()
 	insertPlainEvent(t, app, "9")
@@ -154,7 +164,7 @@ func TestSetNotPurchasedDoesNotPublish(t *testing.T) {
 	patchPurchased(t, server, "9", `{"purchased":true}`)
 	patchPurchased(t, server, "9", `{"purchased":false}`)
 
-	if n := len(mockJS.publishedMessages); n != 1 {
+	if n := queued(t, db, "email"); n != 1 {
 		t.Fatalf("published %d purchased messages, want 1", n)
 	}
 }

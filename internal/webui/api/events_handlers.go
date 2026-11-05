@@ -5,15 +5,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
 	"net/http"
 	"time"
 
-	"github.com/jfms7s/ticket-live-event-scanner/internal/event"
-	"github.com/jfms7s/ticket-live-event-scanner/internal/streams"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/webui/repository"
-	"github.com/nats-io/nats.go/jetstream"
 )
 
 // handleListEvents returns all events, optionally filtered by status (active/finished).
@@ -57,47 +53,25 @@ func (app *App) handleGetEvent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, eventResp)
 }
 
-// handleRetrigger re-publishes an event to trigger a retry notification.
+// handleRetrigger queues another Telegram notification for the event (the
+// dashboard's Retry). The earlier notifications stay as the history.
 func (app *App) handleRetrigger(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(w, r)
 	if !ok {
 		return
 	}
 
-	// Get the event from database
-	eventResp, err := repository.GetEvent(r.Context(), app.db, id, time.Now())
+	// Detached from the client's connection: the notification is queued
+	// even if the client goes away mid-request.
+	queueCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+	defer cancel()
+	err := app.queue.EnqueueRetry(queueCtx, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "event not found")
 		return
 	}
 	if err != nil {
-		log.Printf("Error getting event %d for retrigger: %v", id, err)
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-
-	disc := storedEventFrom(eventResp).discovered(event.ReasonManualRetry)
-
-	discBytes, err := json.Marshal(disc)
-	if err != nil {
-		log.Printf("Error marshaling retrigger payload for event %d: %v", id, err)
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-
-	// Publish to NATS with a unique message ID (nano precision) to avoid deduplication.
-	// Use a detached, short-lived context to decouple the publish from the client's
-	// connection lifecycle, avoiding double-publishing if the client disconnects mid-request.
-	publishCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	msgID := fmt.Sprintf("retry-%d-%d", id, time.Now().UnixNano())
-	_, err = app.js.Publish(publishCtx, streams.EventsSubject,
-		discBytes,
-		jetstream.WithMsgID(msgID),
-	)
-	if err != nil {
-		log.Printf("Error publishing retrigger for event %d: %v", id, err)
+		log.Printf("Error queueing the retry of event %d: %v", id, err)
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
@@ -142,66 +116,18 @@ func (app *App) handleSetPurchased(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only a real false-to-true change sends an invite: ticking an event
-	// that is already purchased (a double submit or a client retry) is a
-	// no-op. Unticking and ticking again is how a user re-sends one.
+	// Only a real false-to-true change queues an invite (in the same
+	// transaction as the flag): ticking an event that is already purchased
+	// (a double submit or a client retry) is a no-op. Unticking and ticking
+	// again is how a user re-sends one.
 	if body.Purchased && changed {
-		app.publishPurchased(r.Context(), id)
+		app.queue.Wake()
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"event_id":  id,
 		"purchased": body.Purchased,
 	})
-}
-
-// publishPurchased publishes an event.Purchased message for id so
-// email-notifier can send a calendar-invite email. Errors are logged but
-// do not fail the purchased-flag request, since the flag itself was
-// already persisted successfully. When the message can't be published, the
-// invite SetEventPurchased left pending is marked failed instead, because
-// no result for it will ever arrive.
-func (app *App) publishPurchased(reqCtx context.Context, id int64) {
-	eventResp, err := repository.GetEvent(reqCtx, app.db, id, time.Now())
-	if err != nil {
-		log.Printf("Error getting event %d for purchased publish: %v", id, err)
-		app.markInviteNotQueued(id, err)
-		return
-	}
-
-	purchased := storedEventFrom(eventResp).purchased(time.Now().UTC())
-
-	purchasedBytes, err := json.Marshal(purchased)
-	if err != nil {
-		log.Printf("Error marshaling purchased payload for event %d: %v", id, err)
-		app.markInviteNotQueued(id, err)
-		return
-	}
-
-	// Detached, short-lived context so the publish isn't tied to the
-	// client's connection lifecycle, matching handleRetrigger's approach.
-	publishCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	msgID := fmt.Sprintf("purchased-%d-%d", id, time.Now().UnixNano())
-	if _, err := app.js.Publish(publishCtx, streams.PurchasedSubject,
-		purchasedBytes,
-		jetstream.WithMsgID(msgID),
-	); err != nil {
-		log.Printf("Error publishing purchased event for event %d: %v", id, err)
-		app.markInviteNotQueued(id, err)
-	}
-}
-
-// markInviteNotQueued records that the invite request for id never reached
-// NATS. It uses its own short context, like the publish, so a client that
-// disconnects doesn't leave the invite pending.
-func (app *App) markInviteNotQueued(id int64, cause error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := repository.UpdateInviteFailed(ctx, app.db, id, "invite not queued: "+cause.Error()); err != nil {
-		log.Printf("Error marking invite failed for event %d: %v", id, err)
-	}
 }
 
 // handleDeleteEvent is the dashboard's Remove: it hides the event (see

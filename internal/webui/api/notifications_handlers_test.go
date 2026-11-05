@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/outbox"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -17,7 +18,7 @@ func TestListNotificationsInvalidStatus(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	app := &App{db: db, js: NewMockJetStream()}
+	app := &App{db: db, queue: &outbox.Queue{DB: db}}
 	server := httptest.NewServer(app.NewMux())
 	defer server.Close()
 
@@ -66,7 +67,7 @@ func TestListNotifications(t *testing.T) {
 		t.Fatalf("Failed to insert failed notification: %v", err)
 	}
 
-	app := &App{db: db, js: NewMockJetStream()}
+	app := &App{db: db, queue: &outbox.Queue{DB: db}}
 	server := httptest.NewServer(app.NewMux())
 	defer server.Close()
 

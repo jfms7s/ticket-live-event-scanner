@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/outbox"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,7 +13,7 @@ func TestHealthz(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	app := &App{db: db, js: NewMockJetStream()}
+	app := &App{db: db, queue: &outbox.Queue{DB: db}}
 	server := httptest.NewServer(app.NewMux())
 	defer server.Close()
 

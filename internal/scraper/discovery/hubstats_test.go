@@ -18,7 +18,8 @@ var lisbonNoon = time.Date(2026, 11, 3, 12, 0, 0, 0, lisbon)
 func statsRun(t *testing.T, site *hubSite, now time.Time, hubs ...string) (*Scraper, error) {
 	t.Helper()
 	cfg := config.Config{UserAgent: "test", HubPages: hubs}
-	s := newScraper(cfg, site.srv.URL, newSeenStore(newMemKV(), migratedDB(t)), &recordingPublisher{})
+	db := migratedDB(t)
+	s := newScraper(cfg, site.srv.URL, db, newQueue(db))
 	s.now = func() time.Time { return now }
 	if err := s.LoadKnownIDs(context.Background()); err != nil {
 		t.Fatal(err)

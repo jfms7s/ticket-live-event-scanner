@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/outbox"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/jfms7s/ticket-live-event-scanner/internal/streams"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/webui/repository"
 )
 
@@ -19,7 +19,7 @@ func TestListEventsEmpty(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	app := &App{db: db, js: NewMockJetStream()}
+	app := &App{db: db, queue: &outbox.Queue{DB: db}}
 	server := httptest.NewServer(app.NewMux())
 	defer server.Close()
 
@@ -48,7 +48,7 @@ func TestGetEventNotFound(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	app := &App{db: db, js: NewMockJetStream()}
+	app := &App{db: db, queue: &outbox.Queue{DB: db}}
 	server := httptest.NewServer(app.NewMux())
 	defer server.Close()
 
@@ -85,7 +85,7 @@ func TestGetEventFound(t *testing.T) {
 		t.Fatalf("Failed to insert test event: %v", err)
 	}
 
-	app := &App{db: db, js: NewMockJetStream()}
+	app := &App{db: db, queue: &outbox.Queue{DB: db}}
 	server := httptest.NewServer(app.NewMux())
 	defer server.Close()
 
@@ -114,7 +114,7 @@ func TestListEventsInvalidStatus(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	app := &App{db: db, js: NewMockJetStream()}
+	app := &App{db: db, queue: &outbox.Queue{DB: db}}
 	server := httptest.NewServer(app.NewMux())
 	defer server.Close()
 
@@ -134,7 +134,7 @@ func TestGetEventInvalidID(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	app := &App{db: db, js: NewMockJetStream()}
+	app := &App{db: db, queue: &outbox.Queue{DB: db}}
 	server := httptest.NewServer(app.NewMux())
 	defer server.Close()
 
@@ -172,7 +172,7 @@ func TestListEventsActiveFinishedFilter(t *testing.T) {
 	insert(1, "past-event-1", "2000-01-01")
 	insert(2, "future-event-2", "2999-01-01")
 
-	app := &App{db: db, js: NewMockJetStream()}
+	app := &App{db: db, queue: &outbox.Queue{DB: db}}
 	server := httptest.NewServer(app.NewMux())
 	defer server.Close()
 
@@ -208,7 +208,7 @@ func TestRetriggerNotFound(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	app := &App{db: db, js: NewMockJetStream()}
+	app := &App{db: db, queue: &outbox.Queue{DB: db}}
 	server := httptest.NewServer(app.NewMux())
 	defer server.Close()
 
@@ -245,8 +245,7 @@ func TestRetriggerSuccess(t *testing.T) {
 		t.Fatalf("Failed to insert test event: %v", err)
 	}
 
-	mockJS := &MockJetStream{}
-	app := &App{db: db, js: mockJS}
+	app := &App{db: db, queue: &outbox.Queue{DB: db}}
 	server := httptest.NewServer(app.NewMux())
 	defer server.Close()
 
@@ -269,9 +268,9 @@ func TestRetriggerSuccess(t *testing.T) {
 		t.Fatalf("Expected status 'pending', got %q", result["status"])
 	}
 
-	// Verify that a message was published to NATS
-	if len(mockJS.publishedMessages) != 1 {
-		t.Fatalf("Expected 1 published message, got %d", len(mockJS.publishedMessages))
+	// A Telegram notification was queued.
+	if n := queued(t, db, "telegram"); n != 1 {
+		t.Fatalf("Expected 1 queued notification, got %d", n)
 	}
 }
 
@@ -280,7 +279,7 @@ func TestSetPurchasedNotFound(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	app := &App{db: db, js: NewMockJetStream()}
+	app := &App{db: db, queue: &outbox.Queue{DB: db}}
 	server := httptest.NewServer(app.NewMux())
 	defer server.Close()
 
@@ -315,8 +314,7 @@ func TestSetPurchasedSuccess(t *testing.T) {
 		t.Fatalf("Failed to insert test event: %v", err)
 	}
 
-	mockJS := NewMockJetStream()
-	app := &App{db: db, js: mockJS}
+	app := &App{db: db, queue: &outbox.Queue{DB: db}}
 	server := httptest.NewServer(app.NewMux())
 	defer server.Close()
 
@@ -352,13 +350,9 @@ func TestSetPurchasedSuccess(t *testing.T) {
 		t.Fatalf("Expected purchased=true after PATCH, got false")
 	}
 
-	// Marking purchased=true should publish an events.purchased message so
-	// email-notifier can send a calendar invite.
-	if len(mockJS.publishedMessages) != 1 {
-		t.Fatalf("Expected 1 published message after purchased=true, got %d", len(mockJS.publishedMessages))
-	}
-	if mockJS.publishedMessages[0].subject != streams.PurchasedSubject {
-		t.Fatalf("Expected publish to %q, got %q", streams.PurchasedSubject, mockJS.publishedMessages[0].subject)
+	// Marking purchased=true queues a calendar-invite email.
+	if n := queued(t, db, "email"); n != 1 {
+		t.Fatalf("Expected 1 queued invite after purchased=true, got %d", n)
 	}
 
 	resp2 := setPurchased(false)
@@ -380,9 +374,9 @@ func TestSetPurchasedSuccess(t *testing.T) {
 		t.Fatalf("Expected purchased=false after second PATCH, got true")
 	}
 
-	// Un-purchasing should not publish anything further.
-	if len(mockJS.publishedMessages) != 1 {
-		t.Fatalf("Expected still 1 published message after purchased=false, got %d", len(mockJS.publishedMessages))
+	// Un-purchasing should not queue anything further.
+	if n := queued(t, db, "email"); n != 1 {
+		t.Fatalf("Expected still 1 queued invite after purchased=false, got %d", n)
 	}
 }
 
@@ -391,7 +385,7 @@ func TestDeleteEventNotFound(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	app := &App{db: db, js: NewMockJetStream()}
+	app := &App{db: db, queue: &outbox.Queue{DB: db}}
 	server := httptest.NewServer(app.NewMux())
 	defer server.Close()
 
@@ -436,7 +430,7 @@ func TestDeleteEventHidesIt(t *testing.T) {
 		t.Fatalf("Failed to insert notification: %v", err)
 	}
 
-	app := &App{db: db, js: NewMockJetStream()}
+	app := &App{db: db, queue: &outbox.Queue{DB: db}}
 	server := httptest.NewServer(app.NewMux())
 	defer server.Close()
 
@@ -523,8 +517,7 @@ func TestSetPurchasedRejectsOversizedBody(t *testing.T) {
 		t.Fatalf("Failed to insert test event: %v", err)
 	}
 
-	mockJS := NewMockJetStream()
-	app := &App{db: db, js: mockJS}
+	app := &App{db: db, queue: &outbox.Queue{DB: db}}
 	server := httptest.NewServer(app.NewMux())
 	defer server.Close()
 
@@ -549,7 +542,7 @@ func TestSetPurchasedRejectsOversizedBody(t *testing.T) {
 	if purchased {
 		t.Fatal("Expected purchased to stay false after an oversized body")
 	}
-	if len(mockJS.publishedMessages) != 0 {
-		t.Fatalf("Expected no published message, got %d", len(mockJS.publishedMessages))
+	if n := queued(t, db, "email"); n != 0 {
+		t.Fatalf("Expected no queued invite, got %d", n)
 	}
 }

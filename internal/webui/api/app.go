@@ -7,15 +7,9 @@ import (
 	"database/sql"
 	"net/http"
 
+	"github.com/jfms7s/ticket-live-event-scanner/internal/outbox"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/runs"
-
-	"github.com/nats-io/nats.go/jetstream"
 )
-
-// Publisher is an interface for publishing messages to JetStream.
-type Publisher interface {
-	Publish(ctx context.Context, subject string, data []byte, opts ...jetstream.PublishOpt) (*jetstream.PubAck, error)
-}
 
 // RunsReader reads the scraper's run log (see package runs).
 type RunsReader interface {
@@ -24,18 +18,20 @@ type RunsReader interface {
 
 // App holds dependencies for HTTP handlers.
 type App struct {
-	db   *sql.DB
-	js   Publisher
-	runs RunsReader
+	db *sql.DB
+	// queue takes the notifications the API causes: a retry, an invite.
+	queue *outbox.Queue
+	runs  RunsReader
 
 	static http.Handler
 	// notifiers says which delivery channels are enabled; see SetNotifierStatus.
 	notifiers map[string]bool
 }
 
-// NewApp constructs an App with the given database and JetStream publisher.
-func NewApp(db *sql.DB, js Publisher) *App {
-	return &App{db: db, js: js}
+// NewApp constructs an App over the database. nudge, when set, is called
+// after a notification is queued so the poller sends it now.
+func NewApp(db *sql.DB, nudge func()) *App {
+	return &App{db: db, queue: &outbox.Queue{DB: db, Nudge: nudge}}
 }
 
 // SetRuns sets the run log GET /api/runs reads. Without one the endpoint

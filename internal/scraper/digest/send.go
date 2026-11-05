@@ -3,48 +3,59 @@ package digest
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"time"
 	"unicode/utf8"
 
-	"github.com/jfms7s/ticket-live-event-scanner/internal/event"
-	"github.com/jfms7s/ticket-live-event-scanner/internal/streams"
-	"github.com/nats-io/nats.go/jetstream"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/notifier/telegram"
 )
 
-// Publisher is the part of jetstream.JetStream Send uses.
-type Publisher interface {
-	Publish(ctx context.Context, subject string, payload []byte, opts ...jetstream.PublishOpt) (*jetstream.PubAck, error)
-}
+// Sender posts the digest text to the chat and returns the message id.
+type Sender func(ctx context.Context, text string) (string, error)
 
-// Send builds this week's digest and publishes it once on
-// streams.DigestSubject (its own DIGEST stream) for the Telegram channel. The
-// message ID is "digest-<ISO week>", so a second publish in the same week
-// (a manual re-run, a retried Job) is dropped by the stream's 7-day dedup
-// window.
-func Send(ctx context.Context, db *sql.DB, runLog RunLog, pub Publisher, now time.Time) error {
+// Send builds this week's digest and posts it once. A row in the digests
+// table (by ISO week) records that the week's digest went out, so a second
+// call the same week (a manual --digest-once, a retry after a restart) posts
+// nothing.
+//
+// A send that failed with an unknown outcome (the request may have reached
+// Telegram) is recorded as sent and not retried: a second post to a shared
+// channel is worse than a missed weekly summary. Any other failure is
+// returned, for the caller to retry.
+func Send(ctx context.Context, db *sql.DB, runLog RunLog, send Sender, now time.Time) error {
 	d, err := Build(ctx, db, runLog, now)
 	if err != nil {
 		return fmt.Errorf("build digest: %w", err)
 	}
+
+	var done int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM digests WHERE week = ?`, d.Week).Scan(&done); err != nil {
+		return fmt.Errorf("check digests: %w", err)
+	}
+	if done > 0 {
+		log.Printf("Digest for %s was already sent this week; not sent again", d.Week)
+		return nil
+	}
+
 	text := Format(d)
 	if n := utf8.RuneCountInString(text); n > MaxMessageLen {
 		return fmt.Errorf("digest is %d characters, over Telegram's %d", n, MaxMessageLen)
 	}
-	data, err := json.Marshal(event.Digest{Week: d.Week, Text: text, GeneratedAt: now.UTC()})
-	if err != nil {
-		return fmt.Errorf("marshal digest: %w", err)
+
+	id, err := send(ctx, text)
+	switch {
+	case errors.Is(err, telegram.ErrDeliveryUnknown):
+		log.Printf("Digest %s may or may not have been sent (%v); not retrying", d.Week, err)
+	case err != nil:
+		return fmt.Errorf("send digest: %w", err)
+	default:
+		log.Printf("Sent the digest for %s (message_id: %s; %d upcoming, %d new)", d.Week, id, d.UpcomingTotal, d.NewCount)
 	}
-	ack, err := pub.Publish(ctx, streams.DigestSubject, data, jetstream.WithMsgID("digest-"+d.Week))
-	if err != nil {
-		return fmt.Errorf("publish digest: %w", err)
+	if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO digests (week, sent_at) VALUES (?, ?)`,
+		d.Week, now.UTC().Format("2006-01-02T15:04:05Z")); err != nil {
+		return fmt.Errorf("record digest %s as sent: %w", d.Week, err)
 	}
-	if ack != nil && ack.Duplicate {
-		log.Printf("Digest for %s was already published this week; not sent again", d.Week)
-		return nil
-	}
-	log.Printf("Published the digest for %s (%d upcoming, %d new)", d.Week, d.UpcomingTotal, d.NewCount)
 	return nil
 }

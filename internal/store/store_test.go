@@ -266,7 +266,8 @@ func TestMigratedColumns(t *testing.T) {
 		"events": {"id", "slug", "title", "venue", "category", "event_date", "url", "image_url",
 			"discovered_at", "purchased", "invite_status", "invite_error", "hidden", "hub_slug"},
 		"notifications": {"id", "event_id", "status", "telegram_message_id", "attempted_at",
-			"confirmed_at", "error", "triggered_by", "delivery_seq"},
+			"confirmed_at", "error", "triggered_by", "delivery_seq", "channel", "dedup_key", "attempts",
+			"next_attempt_at", "last_attempt_started_at"},
 	}
 	for table, cols := range want {
 		if got := orderedColumns(t, db, table); !slices.Equal(got, cols) {

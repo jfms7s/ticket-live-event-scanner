@@ -305,7 +305,7 @@ func UpdateNotificationFailed(ctx context.Context, db *sql.DB, failed *event.Not
 func GetNotificationsForEvent(ctx context.Context, db *sql.DB, eventID int64) ([]NotificationInEventResponse, error) {
 	rows, err := db.QueryContext(ctx, `SELECT `+notificationColumns+`
 		FROM notifications
-		WHERE event_id = ?
+		WHERE event_id = ? AND channel = 'telegram'
 		ORDER BY attempted_at DESC`, eventID)
 	if err != nil {
 		return nil, fmt.Errorf("query notifications: %w", err)
@@ -329,10 +329,12 @@ func GetNotificationsForEvent(ctx context.Context, db *sql.DB, eventID int64) ([
 // ListNotifications returns all notifications, optionally filtered by status.
 // status can be "" (all), "pending", "sent", or "failed".
 func ListNotifications(ctx context.Context, db *sql.DB, status string) ([]NotificationResponse, error) {
-	query := `SELECT ` + notificationColumns + ` FROM notifications`
+	// The invite emails are queued in the same table; the API lists the
+	// Telegram notifications (an invite's state is on the event).
+	query := `SELECT ` + notificationColumns + ` FROM notifications WHERE channel = 'telegram'`
 	var args []any
 	if status != "" {
-		query += " WHERE status = ?"
+		query += " AND status = ?"
 		args = append(args, status)
 	}
 	query += " ORDER BY attempted_at DESC"
@@ -362,6 +364,7 @@ func ListNotifications(ctx context.Context, db *sql.DB, status string) ([]Notifi
 func listNotificationsByEvent(ctx context.Context, db *sql.DB) (map[int64][]NotificationInEventResponse, error) {
 	rows, err := db.QueryContext(ctx, `SELECT `+notificationColumns+`
 		FROM notifications
+		WHERE channel = 'telegram'
 		ORDER BY event_id, attempted_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("query notifications: %w", err)

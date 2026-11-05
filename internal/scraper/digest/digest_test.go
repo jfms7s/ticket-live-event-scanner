@@ -3,18 +3,16 @@ package digest
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
 
-	"github.com/jfms7s/ticket-live-event-scanner/internal/event"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/notifier/telegram"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/runs"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/store"
-	"github.com/jfms7s/ticket-live-event-scanner/internal/streams"
-	"github.com/nats-io/nats.go/jetstream"
 	_ "modernc.org/sqlite"
 )
 
@@ -243,56 +241,64 @@ func TestHubName(t *testing.T) {
 	}
 }
 
-// recordingPublisher records publishes and acks a second digest for the
-// same week as a duplicate, like the stream's dedup window on the
-// "digest-<week>" message ID (checked on a real server in
-// TestSendMessageIDOnARealStream).
-type recordingPublisher struct {
-	msgs  []event.Digest
-	weeks map[string]bool
+// recordingSender records what is posted.
+type recordingSender struct {
+	texts []string
+	err   error
 }
 
-func (p *recordingPublisher) Publish(_ context.Context, subject string, data []byte, _ ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
-	if subject != streams.DigestSubject {
-		return nil, fmt.Errorf("subject %q", subject)
+func (r *recordingSender) send(_ context.Context, text string) (string, error) {
+	if r.err != nil {
+		return "", r.err
 	}
-	var d event.Digest
-	if err := json.Unmarshal(data, &d); err != nil {
-		return nil, err
-	}
-	if p.weeks[d.Week] {
-		return &jetstream.PubAck{Duplicate: true}, nil
-	}
-	p.weeks[d.Week] = true
-	p.msgs = append(p.msgs, d)
-	return &jetstream.PubAck{}, nil
+	r.texts = append(r.texts, text)
+	return "m1", nil
 }
 
-// TestSendPublishesOneDigest is the --digest mode against a temp database:
-// exactly one message, carrying the week and the formatted text.
-func TestSendPublishesOneDigest(t *testing.T) {
+// TestSendPostsOneDigest is the digest job against a temp database: exactly
+// one message, carrying the formatted text.
+func TestSendPostsOneDigest(t *testing.T) {
 	db := testDB(t)
 	insert(t, db, ev{id: 1, title: "Workshop", date: "2025-11-12", discovered: sunday.Add(-time.Hour)})
-	pub := &recordingPublisher{weeks: map[string]bool{}}
+	snd := &recordingSender{}
 
-	if err := Send(context.Background(), db, fakeLog{}, pub, sunday); err != nil {
+	if err := Send(context.Background(), db, fakeLog{}, snd.send, sunday); err != nil {
 		t.Fatal(err)
 	}
-	if len(pub.msgs) != 1 {
-		t.Fatalf("published %d digests, want 1", len(pub.msgs))
-	}
-	if pub.msgs[0].GeneratedAt.IsZero() {
-		t.Error("digest has no generated_at")
-	}
-	if pub.msgs[0].Week != "2025-W45" || !strings.Contains(pub.msgs[0].Text, "Wed 12 Nov · Workshop") {
-		t.Errorf("digest = %+v", pub.msgs[0])
+	if len(snd.texts) != 1 || !strings.Contains(snd.texts[0], "Wed 12 Nov · Workshop") {
+		t.Fatalf("posted %q, want one digest with the workshop", snd.texts)
 	}
 
-	// A re-run the same week is a stream duplicate: still one message.
-	if err := Send(context.Background(), db, fakeLog{}, pub, sunday.Add(time.Minute)); err != nil {
+	// A re-run the same week posts nothing.
+	if err := Send(context.Background(), db, fakeLog{}, snd.send, sunday.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if len(pub.msgs) != 1 {
-		t.Errorf("published %d digests after a re-run, want 1", len(pub.msgs))
+	if len(snd.texts) != 1 {
+		t.Errorf("posted %d digests after a re-run, want 1", len(snd.texts))
+	}
+}
+
+func TestSendReturnsAFailureAndRecordsNothing(t *testing.T) {
+	db := testDB(t)
+	snd := &recordingSender{err: errors.New("telegram down")}
+	if err := Send(context.Background(), db, fakeLog{}, snd.send, sunday); err == nil {
+		t.Fatal("Send hid a failed post")
+	}
+	snd.err = nil
+	if err := Send(context.Background(), db, fakeLog{}, snd.send, sunday); err != nil || len(snd.texts) != 1 {
+		t.Errorf("retry: %v, posted %d; want it posted once now", err, len(snd.texts))
+	}
+}
+
+// An unknown outcome means the post may be out: do not post a second time.
+func TestSendDoesNotRepostAfterAnUnknownOutcome(t *testing.T) {
+	db := testDB(t)
+	snd := &recordingSender{err: fmt.Errorf("%w: timeout", telegram.ErrDeliveryUnknown)}
+	if err := Send(context.Background(), db, fakeLog{}, snd.send, sunday); err != nil {
+		t.Fatalf("Send = %v, want nil (recorded, not retried)", err)
+	}
+	snd.err = nil
+	if err := Send(context.Background(), db, fakeLog{}, snd.send, sunday.Add(time.Minute)); err != nil || len(snd.texts) != 0 {
+		t.Errorf("second Send: %v, posted %d; want nothing posted again", err, len(snd.texts))
 	}
 }

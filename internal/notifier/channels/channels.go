@@ -1,28 +1,42 @@
-// Package channels builds the delivery channels web-ui-api runs: Telegram
-// (new sessions and the weekly digest) and email (calendar invites).
+// Package channels builds the delivery channels web-ui-api sends through:
+// Telegram (each new session, the weekly digest) and email (calendar
+// invites).
 package channels
 
 import (
 	"context"
 	"log"
 	"strings"
+	"time"
 
+	"github.com/jfms7s/ticket-live-event-scanner/internal/deliver"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/emailnotifier/config"
-	"github.com/jfms7s/ticket-live-event-scanner/internal/notifier"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/event"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/notifier/email"
-	"github.com/jfms7s/ticket-live-event-scanner/internal/notifier/emailhandler"
-	"github.com/jfms7s/ticket-live-event-scanner/internal/notifier/handler"
-	"github.com/jfms7s/ticket-live-event-scanner/internal/streams"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/notifier/telegram"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/scraper/digest"
 	telegramconfig "github.com/jfms7s/ticket-live-event-scanner/internal/telegramnotifier/config"
-	"github.com/nats-io/nats.go/jetstream"
 )
 
-// FromEnv builds the channels whose configuration is complete and says, for
-// every channel, whether it is enabled. A channel with unset variables is
-// disabled and logged, so a missing Secret key never takes the dashboard
-// down with it; the status is exported on /metrics so it can be alerted on.
-func FromEnv() (enabled []notifier.Notifier, status map[string]bool) {
-	status = map[string]bool{}
+// Channels is what the process sends with.
+type Channels struct {
+	// Senders go to the delivery poller; a nil one is a disabled channel.
+	Senders deliver.Senders
+	// TelegramGap is the minimum time between two Telegram sends.
+	TelegramGap time.Duration
+	// Digest posts the weekly digest to Telegram; nil when it is disabled.
+	Digest digest.Sender
+	// Enabled says, for every channel, whether it is enabled (exported on
+	// /metrics).
+	Enabled map[string]bool
+}
+
+// FromEnv builds the channels whose configuration is complete. A channel with
+// unset or malformed variables is disabled and logged, so a missing Secret
+// key never takes the dashboard down with it; the status is exported on
+// /metrics so it can be alerted on.
+func FromEnv() Channels {
+	c := Channels{Enabled: map[string]bool{"telegram": false, "email": false}}
 
 	tcfg, missing, err := telegramconfig.Load()
 	switch {
@@ -31,12 +45,15 @@ func FromEnv() (enabled []notifier.Notifier, status map[string]bool) {
 	case len(missing) > 0:
 		log.Printf("WARN Telegram notifications are DISABLED: %s not set", strings.Join(missing, ", "))
 	default:
-		status["telegram"] = true
-		enabled = append(enabled, Telegram(tcfg))
+		c.Enabled["telegram"] = true
+		c.TelegramGap = tcfg.MinSendInterval
+		c.Senders.Telegram = func(ctx context.Context, d event.Discovered) (string, error) {
+			return telegram.SendTelegramMessage(ctx, tcfg.BotToken, tcfg.ChatID, d)
+		}
+		c.Digest = func(ctx context.Context, text string) (string, error) {
+			return telegram.SendText(ctx, tcfg.BotToken, tcfg.ChatID, text)
+		}
 		log.Printf("Minimum interval between Telegram sends: %v", tcfg.MinSendInterval)
-	}
-	if _, ok := status["telegram"]; !ok {
-		status["telegram"] = false
 	}
 
 	ecfg, missing, err := config.Load()
@@ -46,66 +63,18 @@ func FromEnv() (enabled []notifier.Notifier, status map[string]bool) {
 	case len(missing) > 0:
 		log.Printf("WARN Calendar-invite emails are DISABLED: %s not set", strings.Join(missing, ", "))
 	default:
-		status["email"] = true
-		enabled = append(enabled, Email(ecfg))
+		c.Enabled["email"] = true
+		smtp := email.SMTPConfig{
+			Host:           ecfg.SMTPHost,
+			Port:           ecfg.SMTPPort,
+			Username:       ecfg.SMTPUsername,
+			Password:       ecfg.SMTPPassword,
+			From:           ecfg.EmailFrom,
+			AllowPlaintext: ecfg.SMTPAllowPlaintext,
+		}
+		c.Senders.Email = func(ctx context.Context, p event.Purchased) (string, error) {
+			return email.SendCalendarEmail(ctx, smtp, ecfg.EmailTo, p)
+		}
 	}
-	if _, ok := status["email"]; !ok {
-		status["email"] = false
-	}
-	return enabled, status
+	return c
 }
-
-// ensure returns the function that creates spec's durable consumer.
-func ensure(js jetstream.JetStream, spec streams.ConsumerSpec) func(context.Context) (jetstream.Consumer, error) {
-	return func(ctx context.Context) (jetstream.Consumer, error) {
-		return streams.EnsureConsumer(ctx, js, spec)
-	}
-}
-
-// telegram sends each new session, and the weekly digest, to the chat.
-type telegram struct {
-	cfg telegramconfig.Config
-	h   *handler.Handler
-}
-
-// Telegram returns the Telegram channel.
-func Telegram(cfg telegramconfig.Config) notifier.Notifier { return &telegram{cfg: cfg} }
-
-func (t *telegram) Name() string { return "telegram" }
-
-func (t *telegram) Bindings(ctx context.Context, js jetstream.JetStream) ([]notifier.Binding, error) {
-	t.h = handler.New(t.cfg.BotToken, t.cfg.ChatID, js)
-	t.h.SetMinSendInterval(t.cfg.MinSendInterval)
-	d := handler.NewDigest(t.cfg.BotToken, t.cfg.ChatID)
-	return []notifier.Binding{
-		{Name: "events", Ensure: ensure(js, streams.TelegramConsumer()), Handle: t.h.HandleMessage},
-		{Name: "digest", Ensure: ensure(js, streams.TelegramDigestConsumer()), Handle: d.HandleMessage},
-	}, nil
-}
-
-func (t *telegram) Maintain(ctx context.Context) { t.h.CleanupCache(ctx) }
-
-// emailChannel sends a calendar invite for each purchased event.
-type emailChannel struct {
-	cfg config.Config
-	h   *emailhandler.Handler
-}
-
-// Email returns the calendar-invite channel.
-func Email(cfg config.Config) notifier.Notifier { return &emailChannel{cfg: cfg} }
-
-func (e *emailChannel) Name() string { return "email" }
-
-func (e *emailChannel) Bindings(ctx context.Context, js jetstream.JetStream) ([]notifier.Binding, error) {
-	e.h = emailhandler.New(email.SMTPConfig{
-		Host:           e.cfg.SMTPHost,
-		Port:           e.cfg.SMTPPort,
-		Username:       e.cfg.SMTPUsername,
-		Password:       e.cfg.SMTPPassword,
-		From:           e.cfg.EmailFrom,
-		AllowPlaintext: e.cfg.SMTPAllowPlaintext,
-	}, e.cfg.EmailTo, js)
-	return []notifier.Binding{{Name: "purchases", Ensure: ensure(js, streams.EmailConsumer()), Handle: e.h.HandleMessage}}, nil
-}
-
-func (e *emailChannel) Maintain(ctx context.Context) { e.h.CleanupCache(ctx) }
