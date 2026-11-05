@@ -15,12 +15,13 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/jfms7s/ticket-live-event-scanner/internal/event"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/notifier/telegram"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/outbox"
-	"github.com/jfms7s/ticket-live-event-scanner/internal/webui/repository"
 )
 
 // Senders deliver one notification each. A nil sender means that channel is
@@ -82,11 +83,11 @@ func (p *Poller) Nudge() {
 	}
 }
 
-// Run polls until ctx is cancelled. The row in hand finishes before it
-// returns, so a deploy does not cut a send short and then repeat it.
+// Run polls until ctx is cancelled. A send in flight when that happens
+// still has its outcome recorded, so a deploy does not repeat it.
 func (p *Poller) Run(ctx context.Context) {
 	for ctx.Err() == nil {
-		if n, err := p.ProcessDue(ctx); err != nil && ctx.Err() == nil {
+		if n, err := p.pass(ctx); err != nil && ctx.Err() == nil {
 			log.Printf("ERROR delivering notifications: %v", err)
 		} else if n == p.BatchSize {
 			continue // a full batch: there may be more due already
@@ -103,6 +104,17 @@ func (p *Poller) Run(ctx context.Context) {
 	}
 }
 
+// pass is one ProcessDue that turns a panic into an error: the poller shares
+// a process with the HTTP API, and one bad row must not take both down.
+func (p *Poller) pass(ctx context.Context) (n int, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic: %v\n%s", r, debug.Stack())
+		}
+	}()
+	return p.ProcessDue(ctx)
+}
+
 type row struct {
 	id       int64
 	eventID  int64
@@ -113,10 +125,32 @@ type row struct {
 // ProcessDue sends every notification that is due, up to BatchSize, and
 // returns how many it took.
 func (p *Poller) ProcessDue(ctx context.Context) (int, error) {
+	// Only rows of enabled channels are taken: a disabled channel's rows must
+	// neither fill the batch nor keep the poller spinning.
+	var channels []any
+	if p.Senders.Telegram != nil {
+		channels = append(channels, outbox.ChannelTelegram)
+	}
+	if p.Senders.Email != nil {
+		channels = append(channels, outbox.ChannelEmail)
+	}
+	if len(channels) == 0 {
+		p.warnDisabled(outbox.ChannelTelegram)
+		return 0, nil
+	}
+	if p.Senders.Telegram == nil {
+		p.warnDisabled(outbox.ChannelTelegram)
+	}
+	if p.Senders.Email == nil {
+		p.warnDisabled(outbox.ChannelEmail)
+	}
+	args := append([]any{outbox.Format(p.Now())}, channels...)
+	args = append(args, p.BatchSize)
 	rows, err := p.DB.QueryContext(ctx, `
 		SELECT id, event_id, channel, attempts FROM notifications
 		WHERE status = 'pending' AND next_attempt_at IS NOT NULL AND next_attempt_at <= ?
-		ORDER BY id LIMIT ?`, outbox.Format(p.Now()), p.BatchSize)
+		  AND channel IN (`+strings.TrimSuffix(strings.Repeat("?,", len(channels)), ",")+`)
+		ORDER BY id LIMIT ?`, args...)
 	if err != nil {
 		return 0, fmt.Errorf("select due notifications: %w", err)
 	}
@@ -150,10 +184,7 @@ func (p *Poller) ProcessDue(ctx context.Context) (int, error) {
 func (p *Poller) process(ctx context.Context, r row) {
 	send, enabled := p.sender(r.channel)
 	if !enabled {
-		if !p.warnedDisabled[r.channel] {
-			p.warnedDisabled[r.channel] = true
-			log.Printf("WARN the %s channel is disabled; its queued notifications wait", r.channel)
-		}
+		p.warnDisabled(r.channel)
 		return
 	}
 
@@ -169,11 +200,25 @@ func (p *Poller) process(ctx context.Context, r row) {
 	attempts := r.attempts + 1
 
 	id, err := send(ctx, r.eventID)
+	// The outcome is written even when a shutdown has cancelled ctx: the send
+	// may have gone out, and losing the record would repeat it after restart.
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
 	if err != nil {
-		p.recordFailure(ctx, r, attempts, err)
+		if ctx.Err() != nil {
+			return // cut short by the shutdown: the row stays due
+		}
+		p.recordFailure(rctx, r, attempts, err)
 		return
 	}
-	p.recordSuccess(ctx, r, id)
+	p.recordSuccess(rctx, r, id)
+}
+
+func (p *Poller) warnDisabled(channel string) {
+	if !p.warnedDisabled[channel] {
+		p.warnedDisabled[channel] = true
+		log.Printf("WARN the %s channel is disabled; its queued notifications wait", channel)
+	}
 }
 
 // sender returns the function that sends row r's channel and whether the
@@ -251,42 +296,63 @@ func (p *Poller) recordSuccess(ctx context.Context, r row, messageID string) {
 	if r.channel == outbox.ChannelTelegram {
 		msg = messageID
 	}
-	res, err := p.DB.ExecContext(ctx, `
+	changed, err := p.finish(ctx, r, `
 		UPDATE notifications SET status = 'sent', telegram_message_id = ?, confirmed_at = ?, error = NULL, next_attempt_at = NULL
-		WHERE id = ? AND status = 'pending'`, msg, now, r.id)
+		WHERE id = ? AND status = 'pending'`, []any{msg, now, r.id}, "sent", nil)
 	if err != nil {
 		// The message went out; the row stays due and goes out again after
 		// a restart. Say so loudly: this is the duplicate window.
 		log.Printf("ERROR notification %d (%s, event %d) was sent but not recorded: %v", r.id, r.channel, r.eventID, err)
 		return
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return
+	if changed {
+		log.Printf("Sent %s notification %d for event %d", r.channel, r.id, r.eventID)
+	}
+}
+
+// finish updates the notification row and, for an invite, the event's invite
+// state in one transaction, so a crash cannot leave one without the other.
+// The event shows the newest invite row's outcome: an older row finishing
+// late (after an untick and a tick) does not overwrite it.
+func (p *Poller) finish(ctx context.Context, r row, query string, args []any, inviteStatus string, inviteErr *string) (bool, error) {
+	tx, err := p.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return false, nil
 	}
 	if r.channel == outbox.ChannelEmail {
-		if err := repository.UpdateInviteSent(ctx, p.DB, r.eventID); err != nil {
-			log.Printf("ERROR recording the sent invite for event %d: %v", r.eventID, err)
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE events SET invite_status = ?, invite_error = ?
+			WHERE id = ? AND ? = (SELECT MAX(id) FROM notifications WHERE event_id = ? AND channel = 'email')`,
+			inviteStatus, inviteErr, r.eventID, r.id, r.eventID); err != nil {
+			return false, err
 		}
 	}
-	log.Printf("Sent %s notification %d for event %d", r.channel, r.id, r.eventID)
+	return true, tx.Commit()
 }
 
 func (p *Poller) recordFailure(ctx context.Context, r row, attempts int, cause error) {
 	now := p.Now()
 	msg := cause.Error()
 	if errors.Is(cause, errEventGone) || attempts >= outbox.MaxAttempts {
-		if _, err := p.DB.ExecContext(ctx, `
+		changed, err := p.finish(ctx, r, `
 			UPDATE notifications SET status = 'failed', error = ?, confirmed_at = ?, next_attempt_at = NULL
-			WHERE id = ? AND status = 'pending'`, msg, outbox.Format(now), r.id); err != nil {
+			WHERE id = ? AND status = 'pending'`, []any{msg, outbox.Format(now), r.id}, "failed", &msg)
+		if err != nil {
 			log.Printf("ERROR parking notification %d: %v", r.id, err)
 			return
 		}
-		if r.channel == outbox.ChannelEmail {
-			if err := repository.UpdateInviteFailed(ctx, p.DB, r.eventID, msg); err != nil {
-				log.Printf("ERROR recording the failed invite for event %d: %v", r.eventID, err)
-			}
+		if changed {
+			log.Printf("Giving up on %s notification %d for event %d after %d attempt(s): %v", r.channel, r.id, r.eventID, attempts, cause)
 		}
-		log.Printf("Giving up on %s notification %d for event %d after %d attempt(s): %v", r.channel, r.id, r.eventID, attempts, cause)
 		return
 	}
 

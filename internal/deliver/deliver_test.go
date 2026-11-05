@@ -244,8 +244,8 @@ func TestADisabledChannelKeepsItsRowsUntouched(t *testing.T) {
 	ctx := context.Background()
 	f.q.EnqueueDiscovered(ctx, disc(1))
 	p := f.poller(Senders{}) // no Telegram sender
-	if n, _ := p.ProcessDue(ctx); n != 1 {
-		t.Fatalf("processed %d", n)
+	if n, _ := p.ProcessDue(ctx); n != 0 {
+		t.Fatalf("processed %d, want a disabled channel's rows left alone", n)
 	}
 	r := f.rows(t, 1, "telegram")[0]
 	if r.status != "pending" || r.attempts != 0 {
@@ -387,5 +387,80 @@ func TestRunStopsOnCancelAndPicksUpNudges(t *testing.T) {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("Run did not stop after cancel")
+	}
+}
+
+func TestADisabledChannelDoesNotStarveTheOther(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	// 25 invite rows (email disabled) in front of one Telegram row.
+	for i := int64(1); i <= 25; i++ {
+		f.q.EnqueueDiscovered(ctx, disc(i))
+		f.db.Exec(`UPDATE notifications SET status = 'sent', next_attempt_at = NULL WHERE event_id = ?`, i)
+		f.db.Exec(`UPDATE events SET purchased = 1, invite_status = 'pending' WHERE id = ?`, i)
+		tx, _ := f.db.Begin()
+		outbox.EnqueueInvite(ctx, tx, i, f.clk.now())
+		tx.Commit()
+	}
+	f.q.EnqueueDiscovered(ctx, disc(100))
+	s := &tg{}
+	p := f.poller(Senders{Telegram: s.send})
+	n, err := p.ProcessDue(ctx)
+	if err != nil || n != 1 || len(s.sent) != 1 {
+		t.Fatalf("processed %d (%v), sent %v; want the Telegram row sent", n, err, s.sent)
+	}
+	if n, _ := p.ProcessDue(ctx); n != 0 {
+		t.Errorf("second pass processed %d; disabled rows must not count toward a full batch", n)
+	}
+}
+
+func TestShutdownMidSendStillRecordsTheResult(t *testing.T) {
+	f := newFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	f.q.EnqueueDiscovered(ctx, disc(1))
+	var posts int
+	send := func(context.Context, event.Discovered) (string, error) {
+		posts++
+		cancel() // SIGTERM arrives while the request is in flight
+		return "m1", nil
+	}
+	f.poller(Senders{Telegram: send}).ProcessDue(ctx)
+	if got := f.rows(t, 1, "telegram")[0]; got.status != "sent" {
+		t.Fatalf("row = %+v, want sent despite the cancelled context", got)
+	}
+	f.poller(Senders{Telegram: send}).ProcessDue(context.Background())
+	if posts != 1 {
+		t.Errorf("posted %d times, want once", posts)
+	}
+}
+
+func TestANewerInviteRowDecidesTheEventsState(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	f.q.EnqueueDiscovered(ctx, disc(1))
+	f.db.Exec(`UPDATE notifications SET status = 'sent', next_attempt_at = NULL`)
+	f.db.Exec(`UPDATE events SET purchased = 1, invite_status = 'pending' WHERE id = 1`)
+	for i := 0; i < 2; i++ { // tick, untick, tick: two invite rows
+		tx, _ := f.db.Begin()
+		outbox.EnqueueInvite(ctx, tx, 1, f.clk.now().Add(time.Duration(i)*time.Second))
+		tx.Commit()
+	}
+	// The older row fails for good, the newer one is sent.
+	calls := 0
+	send := func(context.Context, event.Purchased) (string, error) {
+		calls++
+		if calls == 1 || calls == 3 {
+			return "", errors.New("smtp down")
+		}
+		return "<id@x>", nil
+	}
+	p := f.poller(Senders{Email: send})
+	f.clk.add(2 * time.Second)
+	p.ProcessDue(ctx) // row A fails once, row B sent
+	f.db.Exec(`UPDATE notifications SET attempts = ? WHERE channel = 'email' AND status = 'pending'`, outbox.MaxAttempts-1)
+	f.clk.add(24 * time.Hour)
+	p.ProcessDue(ctx) // row A parks failed
+	if s, _ := f.invite(t, 1); s != "sent" {
+		t.Errorf("invite_status = %q, want sent (the newest row's outcome)", s)
 	}
 }

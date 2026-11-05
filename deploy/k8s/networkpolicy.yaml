@@ -15,7 +15,7 @@ spec:
   policyTypes:
   - Ingress
 ---
-# (b) NATS: client port 4222 only from the four services that use the bus.
+# (b) NATS: client port 4222 only from the pods labelled app=web-ui-api (the drain check runs as one).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

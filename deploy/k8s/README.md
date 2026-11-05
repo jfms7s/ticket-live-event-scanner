@@ -139,14 +139,26 @@ kubectl delete deployment telegram-notifier email-notifier -n ticket-scanner --i
 Earlier releases moved notifications through NATS JetStream. From v0.14.0 the notification is a row in the database and nothing uses NATS (`nats.yaml` stays in this tree only so a rollback finds it). A message that was published but not yet delivered, or delivered and not yet acknowledged, when the old pod stops would be lost, and one already sent whose result was still in a stream would be sent again, so move only when nothing is in flight:
 
 ```bash
-# Run it just before the rollout, away from the top of the hour (the scrape runs at :00),
+# The label lets the pod through the NATS NetworkPolicy. Run it just before the rollout, away from the top of the hour (the scrape runs at :00),
 # with the new image. NATS_URL and, if the broker has one, NATS_TOKEN come from the old Deployment.
 kubectl -n ticket-scanner run drain-check --rm -i --restart=Never \
+  --labels app=web-ui-api \
   --image=ghcr.io/jfms7s/ticket-live-event-scanner-web-ui-api:<v0.14.0> \
   --env NATS_URL=nats://nats:4222 --command -- /app/web-ui-api --nats-drain-check
 ```
 
-It prints each durable consumer's `pending` and `ack_pending` and exits 0 only when all are zero ("Drained"). If not, wait and run it again. Roll out straight after.
+Two more checks before the rollout, against the database (copy it out of the running pod with `kubectl cp`, or query it in place):
+
+```sql
+-- must be 0: pending rows from before the move are never sent by the new version
+SELECT count(*) FROM notifications WHERE status = 'pending' AND next_attempt_at IS NULL;
+-- must be empty: ids in the scraper's old seen bucket (the `seen-ids:` line of the check) that are not stored events would be announced again
+WITH k(id) AS (VALUES (/* ids from seen-ids, each in its own (…) */ 0)) SELECT id FROM k WHERE id NOT IN (SELECT id FROM events);
+```
+
+Resolve anything either check finds first (a pending row: Retry it from the dashboard or mark it failed; a seen-only id: insert it as a stored event or accept the announcement).
+
+The drain check prints each durable consumer's `pending` and `ack_pending` and exits 0 only when all are zero ("Drained"). If not, wait and run it again. Roll out straight after.
 
 **Rollback.** The earlier release (and its chart) can be pinned back, but notifications queued since the move live only in the database and the old release does not send them. List them, and resend them from the dashboard's Retry (Telegram) or by unticking and ticking the purchase (invite):
 

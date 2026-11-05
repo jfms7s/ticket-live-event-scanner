@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/jfms7s/ticket-live-event-scanner/internal/envconfig"
@@ -57,6 +59,10 @@ func runDrainCheck() int {
 			}
 		}
 	}
+	if err := printSeenIDs(ctx, js); err != nil {
+		fmt.Fprintf(os.Stderr, "seen bucket: %v\n", err)
+		return 2
+	}
 	if !drained {
 		fmt.Println("NOT drained: wait, then run the check again.")
 		return 1
@@ -79,4 +85,28 @@ func consumerBacklog(ctx context.Context, js jetstream.JetStream, spec streams.C
 		return 0, 0, err
 	}
 	return info.NumPending, info.NumAckPending, nil
+}
+
+// printSeenIDs lists the ids in the scraper's old "seen" bucket. The outbox
+// release treats only the events table as seen, so an id that is in the
+// bucket and not in the table (published, but never stored) would be
+// announced again; the runbook compares the two before the rollout.
+func printSeenIDs(ctx context.Context, js jetstream.JetStream) error {
+	kv, err := js.KeyValue(ctx, streams.SeenBucketName)
+	if errors.Is(err, jetstream.ErrBucketNotFound) {
+		fmt.Println("seen bucket absent")
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	keys, err := kv.Keys(ctx)
+	if errors.Is(err, jetstream.ErrNoKeysFound) {
+		keys = nil
+	} else if err != nil {
+		return err
+	}
+	sort.Strings(keys)
+	fmt.Printf("seen bucket: %d ids\nseen-ids: %s\n", len(keys), strings.Join(keys, ","))
+	return nil
 }

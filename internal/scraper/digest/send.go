@@ -55,7 +55,9 @@ func Send(ctx context.Context, db *sql.DB, runLog RunLog, send Sender, now time.
 	}
 	if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO digests (week, sent_at) VALUES (?, ?)`,
 		d.Week, now.UTC().Format("2006-01-02T15:04:05Z")); err != nil {
-		return fmt.Errorf("record digest %s as sent: %w", d.Week, err)
+		// It went out; returning the error would have the caller retry and post
+		// it a second time.
+		log.Printf("ERROR the digest for %s was sent but not recorded: %v", d.Week, err)
 	}
 	return nil
 }
