@@ -24,7 +24,7 @@ const maxPhotoCaptionLen = 1024
 // SendTelegramMessage sends a message to Telegram and returns the message_id on success.
 func SendTelegramMessage(ctx context.Context, botToken, chatID string, disc event.Discovered) (string, error) {
 	// Use a client with timeout to prevent blocking indefinitely
-	// Set to 20s to leave margin before JetStream's 30s AckWait timeout
+	// Set to 20s so a stuck request does not hold the poller
 	client := &http.Client{Timeout: 20 * time.Second}
 	apiBaseURL := fmt.Sprintf("https://api.telegram.org/bot%s", botToken)
 	return sendTelegramMessage(ctx, client, apiBaseURL, chatID, disc)

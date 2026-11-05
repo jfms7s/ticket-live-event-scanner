@@ -7,7 +7,6 @@ import (
 
 // Config holds the scraper's runtime configuration.
 type Config struct {
-	NatsURL        string
 	UserAgent      string
 	RequestDelayMS int
 	// HubPages is TICKETLINE_HUB_PAGES, which only seeds the watches table
@@ -30,7 +29,6 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	return Config{
-		NatsURL:        envconfig.NatsURL(),
 		UserAgent:      envconfig.String("USER_AGENT", "ticket-live-event-scanner/0.1 (personal project; contact: jfms7s@gmail.com)"),
 		RequestDelayMS: delay,
 		HubPages:       hubPagesFromEnv("TICKETLINE_HUB_PAGES", defaultHubPages),

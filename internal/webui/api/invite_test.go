@@ -1,6 +1,7 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
 	"github.com/jfms7s/ticket-live-event-scanner/internal/outbox"
 	"net/http"
@@ -136,8 +137,8 @@ func TestSetPurchasedAgainAfterUntickPublishesAgain(t *testing.T) {
 	insertPlainEvent(t, app, "8")
 
 	patchPurchased(t, server, "8", `{"purchased":true}`)
-	if err := repository.UpdateInviteFailed(t.Context(), db, 8, "smtp down"); err != nil {
-		t.Fatalf("UpdateInviteFailed: %v", err)
+	if err := setInviteFailed(db, 8, "smtp down"); err != nil {
+		t.Fatalf("set invite failed: %v", err)
 	}
 	patchPurchased(t, server, "8", `{"purchased":false}`)
 	patchPurchased(t, server, "8", `{"purchased":true}`)
@@ -167,4 +168,9 @@ func TestSetNotPurchasedDoesNotPublish(t *testing.T) {
 	if n := queued(t, db, "email"); n != 1 {
 		t.Fatalf("published %d purchased messages, want 1", n)
 	}
+}
+
+func setInviteFailed(db *sql.DB, id int64, msg string) error {
+	_, err := db.Exec(`UPDATE events SET invite_status = 'failed', invite_error = ? WHERE id = ?`, msg, id)
+	return err
 }

@@ -3,10 +3,10 @@
 package config
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/jfms7s/ticket-live-event-scanner/internal/envconfig"
-	"github.com/jfms7s/ticket-live-event-scanner/internal/notifier/handler"
 )
 
 // Config holds the Telegram notifier's runtime configuration.
@@ -29,7 +29,7 @@ func Load() (cfg Config, missing []string, err error) {
 	if missing = envconfig.Unset(required...); len(missing) > 0 {
 		return Config{}, missing, nil
 	}
-	minSendInterval, err := handler.ParseMinSendInterval(envconfig.String("TELEGRAM_MIN_SEND_INTERVAL", ""))
+	minSendInterval, err := ParseMinSendInterval(envconfig.String("TELEGRAM_MIN_SEND_INTERVAL", ""))
 	if err != nil {
 		return Config{}, nil, err
 	}
@@ -38,4 +38,24 @@ func Load() (cfg Config, missing []string, err error) {
 		ChatID:          envconfig.String("TELEGRAM_CHAT_ID", ""),
 		MinSendInterval: minSendInterval,
 	}, nil, nil
+}
+
+// DefaultMinSendInterval keeps sends under Telegram's limit of about 20
+// messages a minute to one group.
+const DefaultMinSendInterval = 3 * time.Second
+
+// ParseMinSendInterval reads TELEGRAM_MIN_SEND_INTERVAL: a Go duration,
+// DefaultMinSendInterval when empty, 0 to turn pacing off.
+func ParseMinSendInterval(v string) (time.Duration, error) {
+	if v == "" {
+		return DefaultMinSendInterval, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, fmt.Errorf("TELEGRAM_MIN_SEND_INTERVAL: %w", err)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("TELEGRAM_MIN_SEND_INTERVAL: %v is negative", d)
+	}
+	return d, nil
 }

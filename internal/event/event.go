@@ -1,5 +1,5 @@
 // Package event defines the shared message schemas published to and
-// consumed from NATS JetStream, per the project design doc (kept outside this repo), §8.
+// shared by the scraper, the outbox and the notifiers.
 // Both Go services import this package so the wire format stays in sync
 // without hand-copied struct definitions:
 //   - scraper publishes events.discovered.

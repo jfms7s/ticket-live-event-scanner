@@ -5,7 +5,6 @@ import "github.com/jfms7s/ticket-live-event-scanner/internal/envconfig"
 
 // Config holds web-ui-api's runtime configuration.
 type Config struct {
-	NatsURL string
 	// DatabasePath is DATABASE_PATH, the SQLite file.
 	DatabasePath string
 	// DatabaseAllowEmpty is DATABASE_ALLOW_EMPTY=true: start on an empty
@@ -22,7 +21,6 @@ type Config struct {
 // (via log.Fatalf) if a required variable is missing.
 func Load() Config {
 	return Config{
-		NatsURL:            envconfig.NatsURL(),
 		DatabasePath:       envconfig.Required("DATABASE_PATH"),
 		DatabaseAllowEmpty: envconfig.Bool("DATABASE_ALLOW_EMPTY"),
 		ListenAddr:         envconfig.String("LISTEN_ADDR", ":8080"),

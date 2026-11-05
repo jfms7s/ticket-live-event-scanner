@@ -9,10 +9,6 @@ This directory contains Kubernetes manifests to deploy the ticket-scanner servic
 ## Components
 
 - **namespace.yaml**: Creates the `ticket-scanner` namespace
-- **nats.yaml**: NATS JetStream server (StatefulSet + Service)
-  - StatefulSet with 1 replica, image `nats:2-alpine`
-  - PersistentVolumeClaim 5Gi for JetStream file storage
-  - Headless ClusterIP service on port 4222
 - **web-ui-api.yaml**: Web API backend (Deployment + Service)
   - Go JSON API on port 8080 (exposed via Service on port 80)
   - Liveness/readiness probes on `GET /healthz`
@@ -23,9 +19,7 @@ This directory contains Kubernetes manifests to deploy the ticket-scanner servic
   - These manifests define no Ingress
 - **networkpolicy.yaml**: Ingress NetworkPolicies (egress is not restricted)
   - Default-deny ingress for every pod in the namespace
-  - NATS `4222` only from `web-ui-api` pods
   - `web-ui-api` `8080` from pods in this namespace and from `kube-system` (k3s Traefik)
-  - The services accept optional NATS credentials (`NATS_TOKEN`, `NATS_USER` + `NATS_PASSWORD`, or `NATS_CREDS`); this broker runs without auth
 - **secrets.example.yaml**: Placeholder Secret templates (see "Secrets" section below)
 - **kustomization.yaml**: Kustomize index, includes all resources
 
@@ -73,7 +67,7 @@ docker build -t ticket-scanner/web-ui-api:local -f cmd/web-ui-api/Dockerfile .
 kind load docker-image ticket-scanner/web-ui-api:local
 
 # Apply each manifest directly, not via `-k`, so the :local tags aren't rewritten
-kubectl apply -f namespace.yaml -f nats.yaml \
+kubectl apply -f namespace.yaml \
   -f web-ui-api.yaml \
   -f networkpolicy.yaml
 ```
@@ -134,45 +128,15 @@ the same durable consumers with web-ui-api and split the deliveries:
 kubectl delete deployment telegram-notifier email-notifier -n ticket-scanner --ignore-not-found
 ```
 
-## Moving from the NATS release to the outbox (app v0.14.0)
+## Moving from the NATS releases
 
-Earlier releases moved notifications through NATS JetStream. From v0.14.0 the notification is a row in the database and nothing uses NATS (`nats.yaml` stays in this tree only so a rollback finds it). A message that was published but not yet delivered, or delivered and not yet acknowledged, when the old pod stops would be lost, and one already sent whose result was still in a stream would be sent again, so move only when nothing is in flight:
-
-```bash
-# The label lets the pod through the NATS NetworkPolicy. Run it just before the rollout, away from the top of the hour (the scrape runs at :00),
-# with the new image. NATS_URL and, if the broker has one, NATS_TOKEN come from the old Deployment.
-kubectl -n ticket-scanner run drain-check --rm -i --restart=Never \
-  --labels app=web-ui-api \
-  --image=ghcr.io/jfms7s/ticket-live-event-scanner-web-ui-api:<v0.14.0> \
-  --env NATS_URL=nats://nats:4222 --command -- /app/web-ui-api --nats-drain-check
-```
-
-Two more checks before the rollout, against the database (copy it out of the running pod with `kubectl cp`, or query it in place):
-
-```sql
--- must be 0: pending rows from before the move are never sent by the new version
-SELECT count(*) FROM notifications WHERE status = 'pending' AND next_attempt_at IS NULL;
--- must be empty: ids in the scraper's old seen bucket (the `seen-ids:` line of the check) that are not stored events would be announced again
-WITH k(id) AS (VALUES (/* ids from seen-ids, each in its own (…) */ 0)) SELECT id FROM k WHERE id NOT IN (SELECT id FROM events);
-```
-
-Resolve anything either check finds first (a pending row: Retry it from the dashboard or mark it failed; a seen-only id: insert it as a stored event or accept the announcement).
-
-The drain check prints each durable consumer's `pending` and `ack_pending` and exits 0 only when all are zero ("Drained"). If not, wait and run it again. Roll out straight after.
-
-**Rollback.** The earlier release (and its chart) can be pinned back, but notifications queued since the move live only in the database and the old release does not send them. List them, and resend them from the dashboard's Retry (Telegram) or by unticking and ticking the purchase (invite):
-
-```sql
-SELECT id, event_id, channel, status, attempts, error FROM notifications WHERE status = 'pending' AND next_attempt_at IS NOT NULL;
-```
-
-Rows that were already `sent` or `failed` need nothing.
+Releases before v0.14.0 moved notifications through NATS JetStream; v0.14.0 replaced that with the outbox, and the broker, its volume and its settings are gone from this tree. After the move, remove the leftovers by hand (`kubectl delete statefulset,service,pvc -l app=nats -n ticket-scanner`) once nothing needs a rollback to v0.13.0.
 
 ## Architecture Notes
 
 - **Cluster-internal only**: In these manifests the web UI services (the API, which also serves the dashboard) are ClusterIP services with no Ingress. Access them from within the cluster (e.g., via port-forward for local testing).
 - **Scraper in the API process**: web-ui-api runs the scraper on a ticker (hourly, plus once at start-up). It queries the database to determine known event IDs and publishes only new discoveries.
-- **No broker in use**: NATS is still deployed (idle) for one release so a rollback finds it; a later release removes it.
+- **No message broker**: every notification is a row in the database that the poller sends.
 - **Database on a volume**: web-ui-api owns one SQLite file (WAL) on a ReadWriteOnce volume, so it runs as a single replica with `Recreate`.
 
 ## Upgrading from the scraper CronJobs

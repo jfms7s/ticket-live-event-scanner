@@ -73,7 +73,7 @@ func TestMetricsFromTheRunLog(t *testing.T) {
 
 func TestMetricsWhenTheRunLogFails(t *testing.T) {
 	app := &App{}
-	app.SetRuns(&fakeRuns{err: errors.New("nats: timeout")})
+	app.SetRuns(&fakeRuns{err: errors.New("database is locked")})
 	status, body := getMetrics(t, app)
 	if status != http.StatusOK || !strings.Contains(body, "ticket_scanner_run_log_up 0\n") {
 		t.Errorf("status %d body:\n%s\nwant 200 with run_log_up 0", status, body)

@@ -265,11 +265,11 @@ func TestSummaryIgnoresBadKeysAndValues(t *testing.T) {
 func TestSummaryReportsBucketErrors(t *testing.T) {
 	kv := newMemKV()
 	write(t, kv, rec(1, 0, 1, ""))
-	kv.getErr = errors.New("nats: timeout")
+	kv.getErr = errors.New("database is locked")
 	if _, err := NewReader(kv).Summary(context.Background(), 10); err == nil {
 		t.Error("Summary = nil error with a failing Get, want one")
 	}
-	kv.listErr = errors.New("nats: timeout")
+	kv.listErr = errors.New("database is locked")
 	if _, err := NewReader(kv).Summary(context.Background(), 10); err == nil {
 		t.Error("Summary = nil error with a failing ListKeys, want one")
 	}

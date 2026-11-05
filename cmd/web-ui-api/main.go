@@ -13,7 +13,7 @@
 //     (the embedded web/frontend build) on the same origin.
 //
 // Everything is in one process on one SQLite file; there is no message
-// broker. `--nats-drain-check` is for the move from the release that had one.
+// broker.
 package main
 
 import (
@@ -54,12 +54,7 @@ const backgroundStopTimeout = 15 * time.Second
 func main() {
 	scrapeOnce := flag.Bool("scrape-once", false, "run one discovery now and exit (a manual scrape: kubectl exec ... --scrape-once)")
 	digestOnce := flag.Bool("digest-once", false, "post this week's digest now and exit (it takes the week's slot: Sunday's scheduled digest is then not sent again)")
-	drainCheck := flag.Bool("nats-drain-check", false, "report whether the NATS consumers of the earlier releases have nothing in flight, and exit (0 = drained)")
 	flag.Parse()
-
-	if *drainCheck {
-		os.Exit(runDrainCheck())
-	}
 
 	cfg := config.Load()
 

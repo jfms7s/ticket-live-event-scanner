@@ -58,8 +58,8 @@ func TestSetEventPurchasedMarksInvitePending(t *testing.T) {
 
 	// Recording the purchase again while it is already recorded changes
 	// nothing: no new invite is published, so the invite state stays.
-	if err := UpdateInviteFailed(ctx, db, 1, "smtp down"); err != nil {
-		t.Fatalf("UpdateInviteFailed: %v", err)
+	if err := setInvite(ctx, db, 1, "failed", "smtp down"); err != nil {
+		t.Fatalf("setInvite: %v", err)
 	}
 	changed, err := SetEventPurchased(ctx, db, 1, true)
 	if err != nil {
@@ -123,8 +123,8 @@ func TestSetEventNotPurchasedKeepsInviteStatus(t *testing.T) {
 	if _, err := SetEventPurchased(ctx, db, 1, true); err != nil {
 		t.Fatalf("SetEventPurchased: %v", err)
 	}
-	if err := UpdateInviteSent(ctx, db, 1); err != nil {
-		t.Fatalf("UpdateInviteSent: %v", err)
+	if err := setInvite(ctx, db, 1, "sent", ""); err != nil {
+		t.Fatalf("setInvite: %v", err)
 	}
 	if _, err := SetEventPurchased(ctx, db, 1, false); err != nil {
 		t.Fatalf("SetEventPurchased(false): %v", err)
@@ -135,78 +135,6 @@ func TestSetEventNotPurchasedKeepsInviteStatus(t *testing.T) {
 	}
 }
 
-func TestUpdateInviteSentFromPending(t *testing.T) {
-	db := setupTestDB(t)
-	ctx := context.Background()
-	insertInviteTestEvent(t, db, 1)
-	if _, err := SetEventPurchased(ctx, db, 1, true); err != nil {
-		t.Fatalf("SetEventPurchased: %v", err)
-	}
-
-	if err := UpdateInviteSent(ctx, db, 1); err != nil {
-		t.Fatalf("UpdateInviteSent: %v", err)
-	}
-	status, errMsg := readInvite(t, db, 1)
-	if strOrNil(status) != "sent" || errMsg != nil {
-		t.Fatalf("invite = (%s, %s), want (sent, <nil>)", strOrNil(status), strOrNil(errMsg))
-	}
-}
-
-func TestUpdateInviteFailedFromPending(t *testing.T) {
-	db := setupTestDB(t)
-	ctx := context.Background()
-	insertInviteTestEvent(t, db, 1)
-	if _, err := SetEventPurchased(ctx, db, 1, true); err != nil {
-		t.Fatalf("SetEventPurchased: %v", err)
-	}
-
-	if err := UpdateInviteFailed(ctx, db, 1, "smtp: 550 mailbox unavailable"); err != nil {
-		t.Fatalf("UpdateInviteFailed: %v", err)
-	}
-	status, errMsg := readInvite(t, db, 1)
-	if strOrNil(status) != "failed" || strOrNil(errMsg) != "smtp: 550 mailbox unavailable" {
-		t.Fatalf("invite = (%s, %s), want (failed, smtp: 550 mailbox unavailable)", strOrNil(status), strOrNil(errMsg))
-	}
-}
-
-// Results only resolve a pending invite: a redelivered result is a no-op,
-// and an event purchased before invite tracking (NULL) stays unknown.
-func TestInviteResultsOnlyResolvePending(t *testing.T) {
-	db := setupTestDB(t)
-	ctx := context.Background()
-
-	insertInviteTestEvent(t, db, 1) // never purchased: NULL
-	if err := UpdateInviteSent(ctx, db, 1); err != nil {
-		t.Fatalf("UpdateInviteSent on NULL: %v", err)
-	}
-	if err := UpdateInviteFailed(ctx, db, 1, "x"); err != nil {
-		t.Fatalf("UpdateInviteFailed on NULL: %v", err)
-	}
-	if status, _ := readInvite(t, db, 1); status != nil {
-		t.Fatalf("invite_status = %s, want <nil>", strOrNil(status))
-	}
-
-	insertInviteTestEvent(t, db, 2)
-	if _, err := SetEventPurchased(ctx, db, 2, true); err != nil {
-		t.Fatalf("SetEventPurchased: %v", err)
-	}
-	if err := UpdateInviteSent(ctx, db, 2); err != nil {
-		t.Fatalf("UpdateInviteSent: %v", err)
-	}
-	if err := UpdateInviteFailed(ctx, db, 2, "late"); err != nil {
-		t.Fatalf("UpdateInviteFailed: %v", err)
-	}
-	status, errMsg := readInvite(t, db, 2)
-	if strOrNil(status) != "sent" || errMsg != nil {
-		t.Fatalf("invite = (%s, %s), want (sent, <nil>)", strOrNil(status), strOrNil(errMsg))
-	}
-
-	// Unknown event: no error, nothing to update.
-	if err := UpdateInviteFailed(ctx, db, 404, "x"); err != nil {
-		t.Fatalf("UpdateInviteFailed on unknown event: %v", err)
-	}
-}
-
 func TestListEventsIncludesInvite(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
@@ -214,8 +142,8 @@ func TestListEventsIncludesInvite(t *testing.T) {
 	if _, err := SetEventPurchased(ctx, db, 1, true); err != nil {
 		t.Fatalf("SetEventPurchased: %v", err)
 	}
-	if err := UpdateInviteFailed(ctx, db, 1, "boom"); err != nil {
-		t.Fatalf("UpdateInviteFailed: %v", err)
+	if err := setInvite(ctx, db, 1, "failed", "boom"); err != nil {
+		t.Fatalf("setInvite: %v", err)
 	}
 
 	events, err := ListEvents(ctx, db, "", time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
@@ -228,4 +156,14 @@ func TestListEventsIncludesInvite(t *testing.T) {
 	if strOrNil(events[0].InviteStatus) != "failed" || strOrNil(events[0].InviteError) != "boom" {
 		t.Fatalf("invite = (%s, %s), want (failed, boom)", strOrNil(events[0].InviteStatus), strOrNil(events[0].InviteError))
 	}
+}
+
+// setInvite sets an event's invite state the way the delivery poller does.
+func setInvite(ctx context.Context, db *sql.DB, id int64, status, errMsg string) error {
+	var e any
+	if errMsg != "" {
+		e = errMsg
+	}
+	_, err := db.ExecContext(ctx, `UPDATE events SET invite_status = ?, invite_error = ? WHERE id = ?`, status, e, id)
+	return err
 }
