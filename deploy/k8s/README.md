@@ -80,25 +80,7 @@ kubectl apply -f namespace.yaml -f nats.yaml \
 
 ## Secrets
 
-Two Secrets are required before deployment (`telegram-bot-token` and `smtp-credentials` are each optional: a channel without its Secret is disabled), and a third only when moving from sqld:
-
-### turso-credentials (only to move an existing sqld database)
-The database is a SQLite file on the `web-ui-api-data` volume. To bring over the
-data of an earlier release that used a libsql server (hosted Turso or sqld), keep
-this Secret: on its first start with an empty file, web-ui-api copies every table
-from that server, checks row counts and a hash of every value, and does not start
-unless they match. Later starts never import again. Remove the two `TURSO_*` variables from `web-ui-api.yaml` after the first start: the marker stops a second import while the file exists, but a lost volume with them still set would copy the sqld's frozen snapshot over newer state. A fresh install has no sqld: leave them out and set `DATABASE_ALLOW_EMPTY=true`, since an empty database with nothing to import (what a missing or misnamed Secret also looks like) is otherwise refused.
-
-**Rollback.** The sqld is never written to. Pinning the previous release makes it use the sqld again, but with its data as of the cutover: events, purchase and hide flags and notification outcomes recorded in SQLite since then are not there.
-Create with:
-```bash
-kubectl create secret generic turso-credentials \
-  --from-literal=database_url='libsql://your-db-id.turso.io' \
-  --from-literal=auth_token='your-turso-auth-token' \
-  -n ticket-scanner
-```
-
-For hosted Turso, get these from your [Turso dashboard](https://app.turso.io).
+Two Secrets configure the notification channels (each is optional: a channel without its Secret is disabled). The database is a SQLite file on the `web-ui-api-data` volume and needs none. On a fresh install set `DATABASE_ALLOW_EMPTY=true` for the first start; an empty database is otherwise refused, since it is also what a wrong or unmounted volume looks like and every session would be announced again.
 
 ### telegram-bot-token
 Telegram Bot API credentials. Create with:

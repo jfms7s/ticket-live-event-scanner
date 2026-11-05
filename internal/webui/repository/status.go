@@ -3,13 +3,9 @@ package repository
 import "time"
 
 // dateLayouts are tried in order when parsing a stored event_date. The
-// column is declared DATE and written as plain "2006-01-02" or
-// "2006-01-02T15:04" text (the scraper includes a time when ticketline.pt
-// gives one), but some SQLite driver implementations (observed with
-// modernc.org/sqlite, used in tests) auto-detect DATE-typed columns and
-// hand back RFC3339 on Scan instead of the raw text that was inserted.
-// Trying all three keeps this correct regardless of which behavior the
-// driver in use (test or production) exhibits.
+// column is TEXT, written as plain "2006-01-02" or "2006-01-02T15:04" (the
+// scraper includes a time when ticketline.pt gives one). RFC 3339 is kept for
+// values written by an earlier driver that returned DATE columns re-formatted.
 var dateLayouts = []string{"2006-01-02", "2006-01-02T15:04", time.RFC3339}
 
 // computeStatus computes whether an event is "active" or "finished" based on its event_date.

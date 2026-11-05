@@ -2,7 +2,7 @@
 //
 // Responsibilities:
 //  1. Consume events.discovered messages from NATS JetStream and materialize
-//     them into the Turso database (upsert events, insert pending notifications).
+//     them into the SQLite database (upsert events, insert pending notifications).
 //  2. Consume notifications.sent and notifications.failed messages and update
 //     notification statuses in the database.
 //  3. Deliver the notifications: the Telegram channel (each new session,
@@ -71,15 +71,12 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Open the database and migrate the schema. With DATABASE_PATH this is
-	// the SQLite file; a new one is filled once from the sqld named by
-	// TURSO_DATABASE_URL, and the process does not start unless that copy
-	// verifies (an empty database would make every session look new).
+	// Open the SQLite database and migrate the schema. An empty one is
+	// refused unless DATABASE_ALLOW_EMPTY: a wrong or unmounted volume must
+	// not look like a fresh install (every session would be announced again).
 	db, err := store.Open(ctx, store.Options{
-		Path:        cfg.DatabasePath,
-		LegacyURL:   cfg.TursoDatabaseURL,
-		LegacyToken: cfg.TursoAuthToken,
-		AllowEmpty:  cfg.DatabaseAllowEmpty,
+		Path:       cfg.DatabasePath,
+		AllowEmpty: cfg.DatabaseAllowEmpty,
 	})
 	if err != nil {
 		log.Fatalf("Failed to open the database: %v", err)

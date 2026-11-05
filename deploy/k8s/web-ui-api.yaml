@@ -78,26 +78,11 @@ spec:
         # The SQLite database, on the web-ui-api-data volume.
         - name: DATABASE_PATH
           value: "/data/ticket-scanner.db"
-        # Only to move an existing sqld database into the new SQLite file, once:
-        # a new file is filled from this server at start-up, and the process does
-        # not start unless the copy verifies. REMOVE both after the first start (a
-        # lost volume with them still set would copy the frozen sqld over newer
-        # state). On a fresh install leave them out and set DATABASE_ALLOW_EMPTY
-        # below; without either, an empty database is refused.
+        # A fresh install starts on an empty database only when told to; without
+        # this, an empty file (a wrong or unmounted volume looks the same) is
+        # refused, since every session would be announced again.
         # - name: DATABASE_ALLOW_EMPTY
         #   value: "true"
-        - name: TURSO_DATABASE_URL
-          valueFrom:
-            secretKeyRef:
-              name: turso-credentials
-              key: database_url
-              optional: true
-        - name: TURSO_AUTH_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: turso-credentials
-              key: auth_token
-              optional: true
         - name: LISTEN_ADDR
           value: ":8080"
         # The scraper and the weekly digest run in this process (formerly the
