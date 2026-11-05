@@ -36,3 +36,20 @@ func TestLoadReportsAnInvalidIntervalInsteadOfStopping(t *testing.T) {
 		t.Error("Load accepted TELEGRAM_MIN_SEND_INTERVAL=3sec")
 	}
 }
+
+func TestParseMinSendInterval(t *testing.T) {
+	if d, err := ParseMinSendInterval(""); err != nil || d != DefaultMinSendInterval {
+		t.Errorf(`ParseMinSendInterval("") = %v, %v; want %v`, d, err, DefaultMinSendInterval)
+	}
+	if d, err := ParseMinSendInterval("500ms"); err != nil || d != 500*time.Millisecond {
+		t.Errorf(`ParseMinSendInterval("500ms") = %v, %v`, d, err)
+	}
+	if d, err := ParseMinSendInterval("0"); err != nil || d != 0 {
+		t.Errorf(`ParseMinSendInterval("0") = %v, %v; want 0 (off)`, d, err)
+	}
+	for _, bad := range []string{"3", "fast", "-1s"} {
+		if _, err := ParseMinSendInterval(bad); err == nil {
+			t.Errorf("ParseMinSendInterval(%q) accepted, want an error", bad)
+		}
+	}
+}

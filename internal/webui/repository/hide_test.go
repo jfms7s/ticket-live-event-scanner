@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jfms7s/ticket-live-event-scanner/internal/event"
+	"github.com/jfms7s/ticket-live-event-scanner/internal/outbox"
 )
 
 // TestHideEventKeepsRowOutOfTheAPI pins what Remove means: the event leaves
@@ -74,14 +75,15 @@ func TestRediscoveredHiddenEventStaysHidden(t *testing.T) {
 	defer db.Close()
 	ctx := context.Background()
 
+	queue := &outbox.Queue{DB: db}
 	disc := &event.Discovered{EventID: 7, Slug: "s-7", Title: "Seven", URL: "https://x/7", Reason: event.ReasonDiscovered}
-	if err := UpsertEventAndInsertNotification(ctx, db, disc, 0); err != nil {
+	if _, err := queue.EnqueueDiscovered(ctx, disc); err != nil {
 		t.Fatal(err)
 	}
 	if err := HideEvent(ctx, db, 7); err != nil {
 		t.Fatal(err)
 	}
-	if err := UpsertEventAndInsertNotification(ctx, db, disc, 0); err != nil {
+	if _, err := queue.EnqueueDiscovered(ctx, disc); err != nil {
 		t.Fatal(err)
 	}
 

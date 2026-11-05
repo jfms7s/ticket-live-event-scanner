@@ -13,9 +13,6 @@ import (
 	"strings"
 )
 
-// DefaultNatsURL is the NATS server every service uses when NATS_URL is unset.
-const DefaultNatsURL = "nats://localhost:4222"
-
 // fatalf stops the process; tests replace it.
 var fatalf = log.Fatalf
 
@@ -116,9 +113,4 @@ func List(key string) []string {
 		return nil
 	}
 	return result
-}
-
-// NatsURL returns NATS_URL, or DefaultNatsURL when it is unset.
-func NatsURL() string {
-	return String("NATS_URL", DefaultNatsURL)
 }

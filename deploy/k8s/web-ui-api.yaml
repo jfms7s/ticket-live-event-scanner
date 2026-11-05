@@ -70,13 +70,6 @@ spec:
         - name: http
           containerPort: 8080
         env:
-        # NATS is no longer used by the app (the outbox is in the database); the
-        # variables stay for the one-time drain check (--nats-drain-check). Optional
-        # NATS credentials (the broker here runs without auth). Set at most
-        # one form: NATS_TOKEN, NATS_USER + NATS_PASSWORD, or NATS_CREDS (path to
-        # a .creds file); a half-set pair stops the service. Source them from a Secret.
-        - name: NATS_URL
-          value: "nats://nats:4222"
         # The SQLite database, on the web-ui-api-data volume.
         - name: DATABASE_PATH
           value: "/data/ticket-scanner.db"

@@ -105,7 +105,7 @@ func TestListRunsWithoutARunLog(t *testing.T) {
 
 func TestListRunsBucketError(t *testing.T) {
 	app := &App{}
-	app.SetRuns(&fakeRuns{err: errors.New("nats: timeout")})
+	app.SetRuns(&fakeRuns{err: errors.New("database is locked")})
 	resp := getRuns(t, app, "")
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want 503", resp.StatusCode)

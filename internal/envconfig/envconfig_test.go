@@ -154,17 +154,6 @@ func TestList(t *testing.T) {
 	}
 }
 
-func TestNatsURL(t *testing.T) {
-	t.Setenv("NATS_URL", "")
-	if got := NatsURL(); got != DefaultNatsURL {
-		t.Errorf("unset: got %q", got)
-	}
-	t.Setenv("NATS_URL", "nats://nats:4222")
-	if got := NatsURL(); got != "nats://nats:4222" {
-		t.Errorf("set: got %q", got)
-	}
-}
-
 func TestUnset(t *testing.T) {
 	t.Setenv("ENVCONFIG_SET", "x")
 	t.Setenv("ENVCONFIG_EMPTY", "")

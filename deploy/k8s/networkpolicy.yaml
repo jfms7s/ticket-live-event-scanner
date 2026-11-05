@@ -15,31 +15,7 @@ spec:
   policyTypes:
   - Ingress
 ---
-# (b) NATS: client port 4222 only from the pods labelled app=web-ui-api (the drain check runs as one).
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: nats-from-services
-  namespace: ticket-scanner
-spec:
-  podSelector:
-    matchLabels:
-      app: nats
-  policyTypes:
-  - Ingress
-  ingress:
-  - from:
-    - podSelector:
-        matchExpressions:
-        - key: app
-          operator: In
-          values:
-          - web-ui-api
-    ports:
-    - protocol: TCP
-      port: 4222
----
-# (c) web-ui-api (8080, API and dashboard): from any pod in this
+# (b) web-ui-api (8080, API and dashboard): from any pod in this
 # namespace and from kube-system, where k3s runs the Traefik ingress
 # controller.
 apiVersion: networking.k8s.io/v1

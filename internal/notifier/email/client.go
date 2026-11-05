@@ -21,9 +21,8 @@ import (
 	"github.com/jfms7s/ticket-live-event-scanner/internal/event"
 )
 
-// smtpTimeout bounds the whole SMTP conversation, from dial to QUIT. It
-// leaves margin under JetStream's 30s AckWait, matching the timeout used
-// by the Telegram client. A variable so tests can shorten it.
+// smtpTimeout bounds the whole SMTP conversation, from dial to QUIT; it
+// matches the timeout used by the Telegram client. A variable so tests can shorten it.
 var smtpTimeout = 20 * time.Second
 
 // SMTPConfig holds the SMTP relay credentials used to send calendar
@@ -159,7 +158,7 @@ func writeBase64(w interface{ Write([]byte) (int, error) }, s string) {
 // refuses to send unauthenticated when credentials are configured but the
 // server doesn't offer AUTH. The whole conversation is bounded by
 // smtpTimeout (or ctx's earlier deadline) so a stalled relay can't outlive
-// JetStream's AckWait, and cancelling ctx ends it.
+// the caller's patience, and cancelling ctx ends it.
 func sendViaSMTP(ctx context.Context, cfg SMTPConfig, to []string, msg []byte) error {
 	deadline := time.Now().Add(smtpTimeout)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {

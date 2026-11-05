@@ -124,7 +124,7 @@ func TestRunRecords(t *testing.T) {
 	}
 
 	// A run that failed before discovery records every hub with its error.
-	recs = RunRecords([]string{"maia-98164"}, nil, start, finish, errors.New("load known event IDs: nats: timeout"))
+	recs = RunRecords([]string{"maia-98164"}, nil, start, finish, errors.New("load known event IDs: database is locked"))
 	if len(recs) != 1 || !strings.Contains(recs[0].Error, "load known event IDs") {
 		t.Errorf("RunRecords before discovery = %+v", recs)
 	}
