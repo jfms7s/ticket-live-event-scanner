@@ -1,11 +1,11 @@
 name: Test
 
-# The gate: every push to master and every PR, and build-push.yml calls it so
+# The gate: every push to main and every PR, and build-push.yml calls it so
 # a release tag can't push images unless these pass. Keep in sync with the
 # README's "Local checks".
 on:
   push:
-    branches: [main, master]
+    branches: [main]
   pull_request: {}
   workflow_call: {}
 
