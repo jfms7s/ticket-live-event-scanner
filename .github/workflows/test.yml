@@ -5,7 +5,7 @@ name: Test
 # README's "Local checks".
 on:
   push:
-    branches: [master]
+    branches: [main, master]
   pull_request: {}
   workflow_call: {}
 
