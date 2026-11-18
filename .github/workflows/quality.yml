@@ -1,9 +1,9 @@
 name: Code quality
 
-# Report-only: never gates the build. The default branch is master.
+# Report-only: never gates the build. The default branch is main.
 on:
   push:
-    branches: [main, master]
+    branches: [main]
   pull_request:
 
 permissions:

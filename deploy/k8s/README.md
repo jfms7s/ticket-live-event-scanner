@@ -34,7 +34,7 @@ The raw manifests reference local placeholder image names (e.g. `ticket-scanner/
 `.github/workflows/build-push.yml` builds and pushes all four images to GHCR (multi-arch,
 amd64 + arm64) when a `v*` tag is pushed, tagged with the release tag (e.g. `v0.2.1`).
 A manual run (`workflow_dispatch`) pushes the tag name when started from a tag, and only the
-commit SHA when started from a branch. Merging to `master` pushes no images, and there is no
+commit SHA when started from a branch. Merging to `main` pushes no images, and there is no
 `latest` tag:
 
 - `ghcr.io/jfms7s/ticket-live-event-scanner-web-ui-api`
