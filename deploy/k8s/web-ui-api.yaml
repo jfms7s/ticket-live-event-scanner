@@ -84,6 +84,9 @@ spec:
         # scraper CronJobs): a scrape at start-up and then every hour, the digest
         # on Sunday 19:00 Lisbon. SCRAPER_ENABLED=false turns both off. Run one by
         # hand: kubectl exec deploy/web-ui-api -- /app/web-ui-api --scrape-once
+        # The weekly digest is off; remove this (or set "true") to post it again.
+        - name: DIGEST_ENABLED
+          value: "false"
         # Seeds the watches table when it is empty; after that the hubs are
         # managed on the dashboard's Watches page.
         - name: TICKETLINE_HUB_PAGES

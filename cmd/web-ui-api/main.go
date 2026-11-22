@@ -190,15 +190,20 @@ func allDone(chans ...<-chan struct{}) <-chan struct{} {
 // startSchedulers runs discovery every hour on the hour and the digest on
 // Sunday at 19:00 Lisbon time, in the background until ctx is cancelled. The
 // returned channel is closed once both have returned. SCRAPER_ENABLED=false
-// turns both off (a dev setup that only wants the dashboard); a malformed
+// turns both off (a dev setup that only wants the dashboard) and
+// DIGEST_ENABLED=false turns off the digest alone; a malformed
 // scraper setting disables them with a logged error rather than stopping
 // the dashboard.
 func startSchedulers(ctx context.Context, db *sql.DB, queue *outbox.Queue, sendDigest func(context.Context, string) (string, error), reader *runs.Reader) <-chan struct{} {
 	done := make(chan struct{})
-	if v := strings.ToLower(os.Getenv("SCRAPER_ENABLED")); v == "false" || v == "0" {
-		log.Printf("Scraper and digest schedulers are OFF (SCRAPER_ENABLED=%s)", v)
+	if envOff("SCRAPER_ENABLED") {
+		log.Printf("Scraper and digest schedulers are OFF (SCRAPER_ENABLED=%s)", os.Getenv("SCRAPER_ENABLED"))
 		close(done)
 		return done
+	}
+	digestOn := !envOff("DIGEST_ENABLED")
+	if !digestOn {
+		log.Printf("Digest scheduler is OFF (DIGEST_ENABLED=%s)", os.Getenv("DIGEST_ENABLED"))
 	}
 	scfg, err := scraperconfig.Load()
 	if err != nil {
@@ -219,7 +224,7 @@ func startSchedulers(ctx context.Context, db *sql.DB, queue *outbox.Queue, sendD
 	// hit ticketline.pt on every start.
 	atStart := !ranRecently(ctx, reader, startupGap)
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		schedule.Run(ctx, schedule.System{}, schedule.Job{
@@ -227,22 +232,32 @@ func startSchedulers(ctx context.Context, db *sql.DB, queue *outbox.Queue, sendD
 			Run: func(ctx context.Context) error { return job.Scrape(ctx, deps) },
 		}, schedule.Hourly(), atStart)
 	}()
-	go func() {
-		defer wg.Done()
-		schedule.Run(ctx, schedule.System{}, schedule.Job{
-			Name: "digest", Timeout: 5 * time.Minute,
-			// Sunday's tick is the week's only chance: retry a failure a few
-			// times before giving up until next week.
-			Run: func(ctx context.Context) error {
-				return schedule.Retry(ctx, schedule.System{}, 3, 30*time.Second, func(ctx context.Context) error { return job.Digest(ctx, deps) })
-			},
-		}, schedule.WeeklyAt(lisbon, time.Sunday, 19, 0), false)
-	}()
+	if digestOn {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			schedule.Run(ctx, schedule.System{}, schedule.Job{
+				Name: "digest", Timeout: 5 * time.Minute,
+				// Sunday's tick is the week's only chance: retry a failure a few
+				// times before giving up until next week.
+				Run: func(ctx context.Context) error {
+					return schedule.Retry(ctx, schedule.System{}, 3, 30*time.Second, func(ctx context.Context) error { return job.Digest(ctx, deps) })
+				},
+			}, schedule.WeeklyAt(lisbon, time.Sunday, 19, 0), false)
+		}()
+	}
 	go func() {
 		wg.Wait()
 		close(done)
 	}()
 	return done
+}
+
+// envOff reports whether the environment variable name is set to "false"
+// or "0" (any case); unset or any other value means on.
+func envOff(name string) bool {
+	v := strings.ToLower(os.Getenv(name))
+	return v == "false" || v == "0"
 }
 
 // startupGap is how recently a run must have finished for start-up to skip

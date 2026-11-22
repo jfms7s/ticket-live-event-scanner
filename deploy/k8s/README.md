@@ -13,7 +13,7 @@ This directory contains Kubernetes manifests to deploy the ticket-scanner servic
   - Go JSON API on port 8080 (exposed via Service on port 80)
   - Liveness/readiness probes on `GET /healthz`
   - Keeps its state in a SQLite database (`/data/ticket-scanner.db` on the `web-ui-api-data` volume) and queues every notification there (the outbox, table `notifications`); there is no message broker in use
-  - Also runs the scraper (a scrape at start-up and then every hour, pulling ticketline.pt and queueing a notification for each new session) and the weekly digest (Sunday 19:00 Lisbon); `SCRAPER_ENABLED=false` turns both off. Scrape by hand: `kubectl exec -n ticket-scanner deploy/web-ui-api -- /app/web-ui-api --scrape-once`
+  - Also runs the scraper (a scrape at start-up and then every hour, pulling ticketline.pt and queueing a notification for each new session) and the weekly digest (Sunday 19:00 Lisbon); `SCRAPER_ENABLED=false` turns both off, `DIGEST_ENABLED=false` (set in `web-ui-api.yaml`) the digest alone. Scrape by hand: `kubectl exec -n ticket-scanner deploy/web-ui-api -- /app/web-ui-api --scrape-once`
   - Also delivers the queued notifications, with retries (1 m, 5 m, 30 m, 2 h, 12 h, then failed; the dashboard's Retry queues a fresh one): Telegram (each new session, the weekly digest) and email calendar invites, from the `telegram-bot-token` and `smtp-credentials` Secrets. A channel whose Secret is missing is disabled, not fatal, and shows as 0 in `ticket_scanner_notifier_enabled` on `/metrics`
   - Also serves the dashboard (the React build is embedded in the binary) at `/`, same origin as `/api`
   - These manifests define no Ingress
